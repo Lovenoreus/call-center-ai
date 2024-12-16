@@ -35,14 +35,13 @@ from app.helpers.config import CONFIG
 from app.helpers.features import recognition_retry_max, recording_enabled
 from app.helpers.llm_worker import completion_sync
 from app.helpers.logging import logger
-from app.helpers.monitoring import SpanAttributes, span_attribute, tracer
+from app.helpers.monitoring import SpanAttributeEnum, tracer
 from app.models.call import CallStateModel
 from app.models.message import (
     ActionEnum as MessageActionEnum,
     MessageModel,
     PersonaEnum as MessagePersonaEnum,
     extract_message_style,
-    remove_message_action,
 )
 from app.models.next import NextModel
 from app.models.synthesis import SynthesisModel
@@ -169,8 +168,6 @@ async def on_call_disconnected(
 
 @tracer.start_as_current_span("on_audio_connected")
 async def on_audio_connected(  # noqa: PLR0913
-    audio_bits_per_sample: int,
-    audio_channels: int,
     audio_in: asyncio.Queue[bytes],
     audio_out: asyncio.Queue[bytes | bool],
     audio_sample_rate: int,
@@ -186,8 +183,6 @@ async def on_audio_connected(  # noqa: PLR0913
     Starts the real-time conversation with the LLM.
     """
     await load_llm_chat(
-        audio_bits_per_sample=audio_bits_per_sample,
-        audio_channels=audio_channels,
         audio_in=audio_in,
         audio_out=audio_out,
         audio_sample_rate=audio_sample_rate,
@@ -233,7 +228,7 @@ async def on_automation_recognize_error(
         logger.warning("Unknown context %s, no action taken", contexts)
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "ivr")
+    SpanAttributeEnum.CALL_CHANNEL.attribute("ivr")
 
     # Retry IVR recognition
     logger.info(
@@ -352,7 +347,7 @@ async def on_play_started(
     logger.debug("Play started")
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "voice")
+    SpanAttributeEnum.CALL_CHANNEL.attribute("voice")
 
     # Update last interaction
     async with _db.call_transac(
@@ -378,7 +373,7 @@ async def on_automation_play_completed(
     logger.debug("Play completed")
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "voice")
+    SpanAttributeEnum.CALL_CHANNEL.attribute("voice")
 
     # Update last interaction
     async with _db.call_transac(
@@ -418,7 +413,7 @@ async def on_play_error(error_code: int) -> None:
     logger.debug("Play failed")
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "voice")
+    SpanAttributeEnum.CALL_CHANNEL.attribute("voice")
 
     # Suppress known errors
     # See: https://github.com/MicrosoftDocs/azure-docs/blob/main/articles/communication-services/how-tos/call-automation/play-action.md
@@ -456,8 +451,8 @@ async def on_ivr_recognized(
     logger.info("IVR recognized: %s", label)
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "ivr")
-    span_attribute(SpanAttributes.CALL_MESSAGE, label)
+    SpanAttributeEnum.CALL_CHANNEL.attribute("ivr")
+    SpanAttributeEnum.CALL_MESSAGE.attribute(label)
 
     # Parse language from label
     try:
@@ -521,8 +516,8 @@ async def on_sms_received(
     logger.info("SMS received from %s: %s", call.initiate.phone_number, message)
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_CHANNEL, "sms")
-    span_attribute(SpanAttributes.CALL_MESSAGE, message)
+    SpanAttributeEnum.CALL_CHANNEL.attribute("sms")
+    SpanAttributeEnum.CALL_MESSAGE.attribute(message)
 
     # Add the SMS to the call history
     async with _db.call_transac(
@@ -636,7 +631,7 @@ async def _intelligence_sms(
     )
 
     # Delete action and style from the message as they are in the history and LLM hallucinates them
-    _, content = extract_message_style(remove_message_action(content or ""))
+    _, content = extract_message_style(content or "")
 
     if not content:
         logger.warning("Error generating SMS report")
@@ -754,8 +749,8 @@ async def _handle_ivr_language(
     If only one language is available, selects it by default. Else, plays the IVR prompt.
     """
     # If only one language is available, skip the IVR
-    if len(CONFIG.conversation.initiate.lang.availables) == 1:
-        short_code = CONFIG.conversation.initiate.lang.availables[0].short_code
+    if len(call.initiate.lang.availables) == 1:
+        short_code = call.initiate.lang.availables[0].short_code
         logger.info("Only one language available, selecting %s by default", short_code)
         await on_ivr_recognized(
             call=call,
@@ -777,7 +772,7 @@ async def _handle_ivr_language(
         DtmfTone.NINE,
     ]
     choices = []
-    for i, lang in enumerate(CONFIG.conversation.initiate.lang.availables):
+    for i, lang in enumerate(call.initiate.lang.availables):
         choices.append(
             RecognitionChoice(
                 label=lang.short_code,

@@ -1,15 +1,19 @@
 import asyncio
 import json
 import re
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from enum import Enum
+from typing import Any
 
+import numpy as np
 from aiojobs import Job, Scheduler
 from azure.cognitiveservices.speech import (
     AudioConfig,
     SpeechConfig,
     SpeechRecognizer,
+    SpeechSynthesisOutputFormat,
     SpeechSynthesizer,
 )
 from azure.cognitiveservices.speech.audio import (
@@ -34,11 +38,24 @@ from azure.communication.callautomation.aio import (
     CallConnectionClient,
 )
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from noisereduce import reduce_noise
 
 from app.helpers.cache import async_lru_cache
 from app.helpers.config import CONFIG
+from app.helpers.features import (
+    recognition_stt_complete_timeout_ms,
+    vad_threshold,
+)
 from app.helpers.identity import token
 from app.helpers.logging import logger
+from app.helpers.monitoring import (
+    call_aec_droped,
+    call_aec_missed,
+    call_answer_latency,
+    call_stt_complete_latency,
+    counter_add,
+    gauge_set,
+)
 from app.models.call import CallStateModel
 from app.models.message import (
     MessageModel,
@@ -70,10 +87,13 @@ class TtsCallback(PushAudioOutputStreamCallback):
     Callback for Azure Speech Synthesizer to push audio data to a queue.
     """
 
-    def __init__(self, queue: asyncio.Queue[bytes | bool]):
+    def __init__(self, queue: asyncio.Queue[bytes]):
         self.queue = queue
 
     def write(self, audio_buffer: memoryview) -> int:
+        """
+        Write audio data to the queue.
+        """
         self.queue.put_nowait(audio_buffer.tobytes())
         return audio_buffer.nbytes
 
@@ -204,13 +224,11 @@ async def handle_automation_tts(  # noqa: PLR0913
             return
 
     if store:
-        await scheduler.spawn(
-            _store_assistant_message(
-                call=call,
-                style=style,
-                text=text,
-                scheduler=scheduler,
-            )
+        await _store_assistant_message(
+            call=call,
+            style=style,
+            text=text,
+            scheduler=scheduler,
         )
 
 
@@ -267,13 +285,11 @@ async def handle_realtime_tts(  # noqa: PLR0913
         )
 
     if store:
-        await scheduler.spawn(
-            _store_assistant_message(
-                call=call,
-                style=style,
-                text=text,
-                scheduler=scheduler,
-            )
+        await _store_assistant_message(
+            call=call,
+            style=style,
+            text=text,
+            scheduler=scheduler,
         )
 
 
@@ -523,11 +539,15 @@ async def _use_call_client(
 
 @asynccontextmanager
 async def use_tts_client(
-    audio: asyncio.Queue[bytes | bool],
     call: CallStateModel,
+    out: asyncio.Queue[bytes],
 ) -> AsyncGenerator[SpeechSynthesizer, None]:
     """
     Use a text-to-speech client for a call.
+
+    Output format is in PCM 16-bit, 16 kHz, 1 channel.
+
+    Yields a client to push audio data to the queue. Once the context is exited, the client will stop.
     """
     # Get AAD token
     aad_token = await (await token("https://cognitiveservices.azure.com/.default"))()
@@ -536,73 +556,475 @@ async def use_tts_client(
     # TODO: Use v2 endpoint (https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-lower-speech-synthesis-latency?pivots=programming-language-python#how-to-use-text-streaming) but seems compatible with AAD auth? Found nothing in the docs (https://github.com/Azure-Samples/cognitive-services-speech-sdk/blob/e392c9ca09d44ebd65081e7cb44593a2b16cd5a7/samples/python/web/avatar/app.py#L137).
     config = SpeechConfig(
         endpoint=f"wss://{CONFIG.cognitive_service.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v1",
+        speech_recognition_language=call.lang.short_code,
     )
     config.authorization_token = (
         f"aad#{CONFIG.cognitive_service.resource_id}#{aad_token}"
     )
     config.speech_synthesis_voice_name = call.lang.voice
+    config.set_speech_synthesis_output_format(
+        SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm
+    )
     if call.lang.custom_voice_endpoint_id:
         config.endpoint_id = call.lang.custom_voice_endpoint_id
     # TODO: How to close the client?
     client = SpeechSynthesizer(
         speech_config=config,
-        audio_config=AudioOutputConfig(
-            stream=PushAudioOutputStream(TtsCallback(audio))
-        ),
+        audio_config=AudioOutputConfig(stream=PushAudioOutputStream(TtsCallback(out))),
     )
-
-    # Connect events
-    client.synthesis_started.connect(lambda _: logger.debug("TTS started"))
-    client.synthesis_completed.connect(lambda _: logger.debug("TTS completed"))
 
     # Return
     yield client
 
 
-@asynccontextmanager
-async def use_stt_client(
-    audio_bits_per_sample: int,
-    audio_channels: int,
-    audio_sample_rate: int,
-    call: CallStateModel,
-    callback: Callable[[str], None],
-) -> AsyncGenerator[PushAudioInputStream, None]:
+class SttClient:
     """
-    Use a speech-to-text client for a call.
+    Speech-to-text client.
 
-    Yields a stream to push audio data to the client. Once the context is exited, the client will stop.
+    Input format is in PCM 16-bit, 16 kHz, 1 channel.
     """
-    # Get AAD token
-    aad_token = await (await token("https://cognitiveservices.azure.com/.default"))()
 
-    # Create client
-    stream = PushAudioInputStream(
-        stream_format=AudioStreamFormat(
-            bits_per_sample=audio_bits_per_sample,
-            channels=audio_channels,
-            samples_per_second=audio_sample_rate,
-        ),
-    )
-    client = SpeechRecognizer(
-        audio_config=AudioConfig(stream=stream),
-        language=call.lang.short_code,
-        speech_config=SpeechConfig(
-            auth_token=f"aad#{CONFIG.cognitive_service.resource_id}#{aad_token}",
-            region=CONFIG.cognitive_service.region,
-        ),
-    )
+    _call: CallStateModel
+    _client: SpeechRecognizer | None = None
+    _scheduler: Scheduler
+    _stream: PushAudioInputStream
+    _stt_buffer: list[str] = []
+    _stt_complete_gate: asyncio.Event = asyncio.Event()
 
-    # Connect events
-    client.recognized.connect(lambda e: callback(e.result.text))
-    client.session_started.connect(lambda _: logger.debug("STT started"))
-    client.session_stopped.connect(lambda _: logger.debug("STT stopped"))
-    client.canceled.connect(lambda event: logger.warning("STT cancelled: %s", event))
+    def __init__(
+        self,
+        sample_rate: int,
+        call: CallStateModel,
+        scheduler: Scheduler,
+    ):
+        self._call = call
+        self._scheduler = scheduler
 
-    try:
+        self._stream = PushAudioInputStream(
+            stream_format=AudioStreamFormat(
+                bits_per_sample=16,
+                channels=1,
+                samples_per_second=sample_rate,
+            ),
+        )
+
+    async def __aenter__(self):
+        # Get AAD token
+        aad_token = await (
+            await token("https://cognitiveservices.azure.com/.default")
+        )()
+
+        # Create client
+        self.client = SpeechRecognizer(
+            audio_config=AudioConfig(stream=self._stream),
+            language=self._call.lang.short_code,
+            speech_config=SpeechConfig(
+                auth_token=f"aad#{CONFIG.cognitive_service.resource_id}#{aad_token}",
+                region=CONFIG.cognitive_service.region,
+            ),
+        )
+
+        # TSS events
+        self.client.recognized.connect(self._complete_callback)
+        self.client.recognizing.connect(self._partial_callback)
+
+        # Debugging events
+        self.client.canceled.connect(
+            lambda event: logger.warning("STT cancelled: %s", event)
+        )
+        self.client.session_started.connect(lambda _: logger.debug("STT started"))
+        self.client.session_stopped.connect(lambda _: logger.debug("STT stopped"))
+
         # Start STT
-        client.start_continuous_recognition_async()
-        # Return
-        yield stream
-    finally:
+        self.client.start_continuous_recognition_async()
+
+        return self
+
+    async def __aexit__(self, *args, **kwargs):
         # Stop STT
-        client.stop_continuous_recognition_async()
+        self.client.stop_continuous_recognition_async()
+
+    def _partial_callback(self, event):
+        """
+        Handle partial recognition.
+        """
+        # Skip empty results
+        text = event.result.text
+        if not text:
+            return
+
+        # Initialize buffer if empty
+        if not self._stt_buffer:
+            self._stt_buffer.append("")
+
+        # Store the result
+        self._stt_buffer[-1] = text
+        logger.debug("Partial recognition: %s", self._stt_buffer)
+
+    def _complete_callback(self, event):
+        """
+        Handle complete recognition.
+        """
+        # Skip empty results
+        text = event.result.text
+        if not text:
+            return
+
+        # Initialize buffer if empty
+        if not self._stt_buffer:
+            self._stt_buffer.append("")
+
+        # Store the result
+        self._stt_buffer[-1] = text
+        logger.debug("Complete recognition: %s", self._stt_buffer)
+
+        # Prepare for the next recognition
+        self._stt_buffer.append("")
+
+        # Signal the completion
+        self._stt_complete_gate.set()
+
+    async def _clear_buffer_when_completed(self) -> None:
+        """
+        Clear the buffer when the recognition is completed.
+        """
+        # Wait for the completion
+        await self._stt_complete_gate.wait()
+
+        # Clear the buffer
+        self._stt_buffer.clear()
+        self._stt_complete_gate.clear()
+
+    async def _report_complete_latency(self) -> None:
+        """
+        Report the complete latency.
+        """
+        # Measure the latency
+        start = time.monotonic()
+
+        # Wait for the completion
+        await self._stt_complete_gate.wait()
+
+        # Report the measure
+        gauge_set(
+            metric=call_stt_complete_latency,
+            value=time.monotonic() - start,
+        )
+
+    def push_audio(self, audio_data: bytes):
+        """
+        Push audio data to the recognition.
+        """
+        self._stream.write(audio_data)
+
+    async def pull_recognition(self) -> str:
+        """
+        Pull the recognition result and reset the buffer.
+        """
+        # Report the complete latency
+        await self._scheduler.spawn(self._report_complete_latency())
+
+        # Wait the complete recognition for 50ms maximum
+        try:
+            await asyncio.wait_for(
+                self._stt_complete_gate.wait(),
+                timeout=await recognition_stt_complete_timeout_ms() / 1000,
+            )
+        except TimeoutError:
+            logger.debug("Complete recognition timeout, using partial recognition")
+
+        # Build text from the buffer
+        text = " ".join(self._stt_buffer).strip()
+
+        # Clear the buffer when completed
+        await self._scheduler.spawn(self._clear_buffer_when_completed())
+
+        # Return the text
+        return text
+
+
+class AECStream:
+    """
+    Real-time audio stream with echo cancellation (AEC).
+
+    Input and output formats are in PCM 16-bit, 16 kHz, 1 channel.
+    """
+
+    _aec_in_queue: asyncio.Queue[bytes] = asyncio.Queue()
+    _aec_out_queue: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue()
+    _aec_reference_queue: asyncio.Queue[bytes] = asyncio.Queue()
+    _answer_start: float | None = None
+    _chunk_size: int
+    _empty_packet: bytes
+    _in_raw_queue: asyncio.Queue[bytes]
+    _in_reference_queue: asyncio.Queue[bytes] = asyncio.Queue()
+    _out_queue: asyncio.Queue[bytes]
+    _packet_duration_ms: int
+    _packet_size: int
+    _run_task: asyncio.Future
+    _sample_rate: int
+    _scheduler: Scheduler
+
+    def __init__(  # noqa: PLR0913
+        self,
+        in_raw_queue: asyncio.Queue[bytes],
+        in_reference_queue: asyncio.Queue[bytes],
+        out_queue: asyncio.Queue[bytes | Any],
+        sample_rate: int,
+        scheduler: Scheduler,
+        max_delay_ms: int = 200,
+        packet_duration_ms: int = 20,
+    ):
+        """
+        Initialize the audio stream.
+
+        Parameters:
+        - `in_raw_queue`: Queue for the raw audio input (user speaking).
+        - `in_reference_queue`: Queue for the reference audio input (bot speaking).
+        - `max_delay_ms`: Maximum delay to consider between the raw and reference audio.
+        - `out_queue`: Queue for the processed audio output (echo-cancelled user speaking).
+        - `packet_duration_ms`: Duration of each audio packet in milliseconds.
+        - `sample_rate`: Audio sample rate in Hz.
+        - `scheduler`: Scheduler for the async tasks.
+        """
+        self._in_raw_queue = in_raw_queue
+        self._in_reference_queue = in_reference_queue
+        self._out_queue = out_queue
+        self._packet_duration_ms = packet_duration_ms
+        self._sample_rate = sample_rate
+        self._scheduler = scheduler
+
+        max_delay_samples = int(max_delay_ms / 1000 * self._sample_rate)
+        self._bot_voice_buffer = np.zeros(max_delay_samples, dtype=np.float32)
+
+        self._chunk_size = int(self._sample_rate * self._packet_duration_ms / 1000)
+        self._packet_size = self._chunk_size * 2  # Each sample is 2 bytes (PCM 16-bit)
+        self._empty_packet: bytes = b"\x00" * self._packet_size
+
+    async def __aenter__(self):
+        self._run_task = asyncio.gather(
+            self._forward_in(),
+            self._forward_out(),
+            self._run(),
+        )
+        return self
+
+    async def __aexit__(self, *args, **kwargs):
+        self._run_task.cancel()
+
+    def _pcm_to_float(self, pcm: bytes) -> np.ndarray:
+        """
+        Convert PCM 16-bit to float (-1.0 to 1.0).
+        """
+        return (
+            np.frombuffer(
+                buffer=pcm,
+                dtype=np.int16,
+            ).astype(np.float32)
+            / 32768.0
+        )
+
+    def _float_to_pcm(self, floats: np.ndarray) -> bytes:
+        """
+        Convert float (-1.0 to 1.0) to PCM 16-bit.
+        """
+        pcm = (floats * 32767).clip(-32768, 32767).astype(np.int16)
+        return pcm.tobytes()
+
+    def _update_input_buffer(self, voice: np.ndarray) -> None:
+        """
+        Update the rolling buffer for the input voice.
+        """
+        buffer_length = len(self._bot_voice_buffer)
+        reference_length = len(voice)
+
+        if reference_length >= buffer_length:
+            # If the reference is longer than the buffer, keep the most recent samples
+            self._bot_voice_buffer = voice[-buffer_length:]
+        else:
+            # Append new samples and keep the buffer size fixed
+            self._bot_voice_buffer = np.roll(self._bot_voice_buffer, -reference_length)
+            self._bot_voice_buffer[-reference_length:] = voice
+
+    async def _rms_speech_detection(self, voice: np.ndarray) -> bool:
+        """
+        Simple speech detection based on RMS (acoustic pressure).
+
+        Returns True if speech is detected, False otherwise.
+        """
+        # Calculate Root Mean Square (RMS)
+        rms = np.sqrt(np.mean(voice**2))
+        # Get VAD threshold, divide by 10 to more usability from user side, as RMS is in range 0-1 and a detection of 0.1 is a good maximum threshold
+        threshold = await vad_threshold() / 10
+        return rms >= threshold
+
+    async def _process_one(self, input_pcm: bytes) -> None:
+        """
+        Process one audio chunk.
+        """
+        # Push raw input if reference is empty
+        if self._aec_reference_queue.empty():
+            reference_pcm = self._empty_packet
+
+        # Reference signal is available
+        else:
+            reference_pcm = await self._aec_reference_queue.get()
+            self._aec_reference_queue.task_done()
+
+        # Convert PCM to float for processing
+        input_signal = self._pcm_to_float(input_pcm)
+        reference_signal = self._pcm_to_float(reference_pcm)
+
+        # Update the input buffer with the reference signal
+        self._update_input_buffer(reference_signal)
+
+        # Reference signal is empty, skip noise reduction
+        if np.all(reference_signal == 0):
+            # Perform VAD test
+            input_speaking = await self._rms_speech_detection(input_signal)
+
+            # Add processed PCM and metadata to the output queue
+            await self._aec_out_queue.put((input_pcm, input_speaking))
+            return
+
+        # Apply noise reduction
+        reduced_signal = reduce_noise(
+            # Input signal
+            sr=self._sample_rate,
+            y=input_signal,
+            # Quality
+            n_fft=128,
+            # Since the reference signal is already noise-reduced, we can assume it's stationary
+            clip_noise_stationary=False,  # Noise is longer than the signal
+            stationary=True,
+            y_noise=self._bot_voice_buffer,
+            # Output quality
+            prop_decrease=0.75,  # Reduce noise by 75%
+        )
+
+        # Perform VAD test
+        input_speaking = await self._rms_speech_detection(reduced_signal)
+
+        # Convert processed float signal back to PCM
+        processed_pcm = self._float_to_pcm(reduced_signal)
+
+        # Add processed PCM and metadata to the output queue
+        await self._aec_out_queue.put((processed_pcm, input_speaking))
+
+    async def _ensure_run_slo(self, input_pcm: bytes) -> None:
+        """
+        Ensure the audio stream is processed within the SLO.
+
+        If the processing is delayed, the original input will be returned.
+        """
+        # Process the audio
+        try:
+            await asyncio.wait_for(
+                self._process_one(input_pcm),
+                timeout=self._packet_duration_ms
+                / 1000
+                * 4,  # Allow temporary medium latency
+            )
+
+        # If the processing is delayed, return the original input
+        except TimeoutError:
+            # Enrich span
+            counter_add(
+                metric=call_aec_missed,
+                value=1,
+            )
+            await self._aec_out_queue.put((input_pcm, False))
+
+    async def _run(self) -> None:
+        """
+        Process the audio stream in real-time.
+        """
+        async with Scheduler(
+            limit=5,  # Allow 5 concurrent tasks
+        ) as scheduler:
+            while True:
+                # Fetch input audio
+                input_pcm = await self._aec_in_queue.get()
+                self._aec_in_queue.task_done()
+
+                # Queue the processing
+                await scheduler.spawn(self._ensure_run_slo(input_pcm))
+
+    async def pull_audio(self) -> tuple[bytes, bool]:
+        """
+        Pull processed PCM audio and metadata from the output queue.
+
+        Returns a tuple with the echo-cancelled PCM audio and a boolean flag indicating if the user was speaking.
+        """
+        # Fetch output audio
+        try:
+            return await asyncio.wait_for(
+                fut=self._aec_out_queue.get(),
+                timeout=self._packet_duration_ms
+                / 1000
+                * 1.5,  # Allow temporary small latency
+            )
+
+        # If the processing is delayed, return an empty packet
+        except TimeoutError:
+            # Enrich span
+            counter_add(
+                metric=call_aec_droped,
+                value=1,
+            )
+            # Return empty packet
+            return self._empty_packet, False
+
+    async def _forward_in(self) -> None:
+        """
+        Send input audio to the runner.
+        """
+        while True:
+            # Consume input
+            audio_data = await self._in_raw_queue.get()
+            self._in_raw_queue.task_done()
+
+            # Validate packet size
+            if len(audio_data) != self._packet_size:
+                raise ValueError(
+                    f"Expected packet size {self._packet_size} bytes, got {len(audio_data)} bytes."
+                )
+
+            # Push audio to the AEC queue
+            await self._aec_in_queue.put(audio_data)
+
+    async def _forward_out(self) -> None:
+        """
+        Forward processed audio to the clean output queue.
+        """
+        while True:
+            # Consume input
+            audio_data = await self._in_reference_queue.get()
+            self._in_reference_queue.task_done()
+
+            # Report the answer latency and reset the timer
+            if self._answer_start:
+                # Enrich span
+                gauge_set(
+                    metric=call_answer_latency,
+                    value=time.monotonic() - self._answer_start,
+                )
+            self._answer_start = None
+
+            # Send to clean output
+            await self._out_queue.put(audio_data)
+
+            # Send a copy as reference, extract packets and pad them if necessary
+            buffer_pointer = 0
+            while buffer_pointer < len(audio_data):
+                chunk = audio_data[: self._packet_size].ljust(
+                    self._packet_size, b"\x00"
+                )
+                await self._aec_reference_queue.put(chunk)
+                buffer_pointer += self._packet_size
+
+    def answer_start(self):
+        """
+        Notify the the user ended speaking.
+        """
+        self._answer_start = time.monotonic()

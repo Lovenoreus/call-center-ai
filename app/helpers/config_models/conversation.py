@@ -40,16 +40,25 @@ class LanguageModel(BaseModel):
     # Voice list from Azure TTS
     # See: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
     availables: list[LanguageEntryModel] = [
+<<<<<<< HEAD
         # LanguageEntryModel(
         #     pronunciations_en=["French", "FR", "France"],
         #     short_code="fr-FR",
         #     voice="fr-FR-DeniseNeural",
         # ),
+=======
+        LanguageEntryModel(
+            pronunciations_en=["French", "FR", "France"],
+            short_code="fr-FR",
+            voice="fr-FR-VivienneMultilingualNeural",
+        ),
+>>>>>>> 16b91182eb7754333039f7d5ca89d998d8d83439
         LanguageEntryModel(
             pronunciations_en=["English", "EN", "United States"],
             short_code="en-US",
-            voice="en-US-NancyNeural",
+            voice="en-US-ShimmerTurboMultilingualNeural",
         ),
+<<<<<<< HEAD
         # LanguageEntryModel(
         #     pronunciations_en=["Spanish", "ES", "Spain"],
         #     short_code="es-ES",
@@ -60,6 +69,18 @@ class LanguageModel(BaseModel):
         #     short_code="zh-CN",
         #     voice="zh-CN-XiaoqiuNeural",
         # ),
+=======
+        LanguageEntryModel(
+            pronunciations_en=["Spanish", "ES", "Spain"],
+            short_code="es-ES",
+            voice="es-ES-ArabellaMultilingualNeural",
+        ),
+        LanguageEntryModel(
+            pronunciations_en=["Chinese", "ZH", "China"],
+            short_code="zh-CN",
+            voice="zh-CN-XiaoyuMultilingualNeural",
+        ),
+>>>>>>> 16b91182eb7754333039f7d5ca89d998d8d83439
     ]
 
     @property

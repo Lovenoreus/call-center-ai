@@ -225,8 +225,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-02-02-preview' = {
             }
           ]
           resources: {
-            cpu: 1
-            memory: '2Gi'
+            cpu: json('1.25')
+            memory: '2.5Gi'
           }
           probes: [
             {
@@ -265,7 +265,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-02-02-preview' = {
               type: 'cpu'
               metadata: {
                 type: 'Utilization'
-                value: '80'
+                value: '60' // Scale early to avoid cold start
               }
             }
           }
@@ -905,10 +905,12 @@ resource configValues 'Microsoft.AppConfiguration/configurationStores/keyValues@
     callback_timeout_hour: 3
     phone_silence_timeout_sec: 20
     recognition_retry_max: 2
+    recognition_stt_complete_timeout_ms: 100
     recording_enabled: false
     slow_llm_for_chat: false
-    vad_cutoff_timeout_ms: 600
-    vad_silence_timeout_ms: 400
+    vad_cutoff_timeout_ms: 250
+    vad_silence_timeout_ms: 500
+    vad_threshold: '0.5'
   }): {
     parent: configStore
     name: item.key

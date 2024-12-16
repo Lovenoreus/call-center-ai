@@ -81,7 +81,10 @@ class CosmosDbStore(IStore):
                 exist = True
         return exist
 
-    async def call_get(self, call_id: UUID) -> CallStateModel | None:
+    async def call_get(
+        self,
+        call_id: UUID,
+    ) -> CallStateModel | None:
         logger.debug("Loading call %s", call_id)
 
         # Try cache
@@ -114,7 +117,9 @@ class CosmosDbStore(IStore):
         if call:
             await self._cache.set(
                 key=cache_key,
-                ttl_sec=await callback_timeout_hour(),
+                ttl_sec=max(await callback_timeout_hour(), 1)
+                * 60
+                * 60,  # Ensure at least 1 hour
                 value=call.model_dump_json(),
             )
 
@@ -185,7 +190,9 @@ class CosmosDbStore(IStore):
             cache_key_id = self._cache_key_call_id(call.call_id)
             await self._cache.set(
                 key=cache_key_id,
-                ttl_sec=await callback_timeout_hour(),
+                ttl_sec=max(await callback_timeout_hour(), 1)
+                * 60
+                * 60,  # Ensure at least 1 hour
                 value=call.model_dump_json(),
             )
 
@@ -193,7 +200,10 @@ class CosmosDbStore(IStore):
         await scheduler.spawn(_exec())
 
     # TODO: Catch errors
-    async def call_create(self, call: CallStateModel) -> CallStateModel:
+    async def call_create(
+        self,
+        call: CallStateModel,
+    ) -> CallStateModel:
         logger.debug("Creating new call %s", call.call_id)
 
         # Serialize
@@ -213,7 +223,9 @@ class CosmosDbStore(IStore):
         cache_key = self._cache_key_call_id(call.call_id)
         await self._cache.set(
             key=cache_key,
-            ttl_sec=await callback_timeout_hour(),
+            ttl_sec=max(await callback_timeout_hour(), 1)
+            * 60
+            * 60,  # Ensure at least 1 hour
             value=call.model_dump_json(),
         )
 
@@ -225,8 +237,17 @@ class CosmosDbStore(IStore):
 
         return call
 
-    async def call_search_one(self, phone_number: str) -> CallStateModel | None:
+    async def call_search_one(
+        self,
+        phone_number: str,
+        callback_timeout: bool = True,
+    ) -> CallStateModel | None:
         logger.debug("Loading last call for %s", phone_number)
+
+        timeout = await callback_timeout_hour()
+        if timeout < 1 and callback_timeout:
+            logger.debug("Callback timeout if off, skipping search")
+            return None
 
         # Try cache
         cache_key = self._cache_key_phone_number(phone_number)
@@ -237,6 +258,11 @@ class CosmosDbStore(IStore):
             except ValidationError:
                 logger.debug("Parsing error", exc_info=True)
 
+        # Filter by timeout if needed
+        extra_where = ""
+        if callback_timeout:
+            extra_where = f"AND c.created_at >= DATETIMEADD('hh', -{timeout}, GETCURRENTDATETIME())"
+
         # Try live
         call = None
         try:
@@ -244,7 +270,7 @@ class CosmosDbStore(IStore):
                 async with self._use_client() as db:
                     items = db.query_items(
                         max_item_count=1,
-                        query=f"SELECT * FROM c WHERE (STRINGEQUALS(c.initiate.phone_number, @phone_number, true) OR STRINGEQUALS(c.claim.policyholder_phone, @phone_number, true)) AND c.created_at >= DATETIMEADD('hh', -{await callback_timeout_hour()}, GETCURRENTDATETIME()) ORDER BY c.created_at DESC",
+                        query=f"SELECT * FROM c WHERE (STRINGEQUALS(c.initiate.phone_number, @phone_number, true) OR STRINGEQUALS(c.claim.policyholder_phone, @phone_number, true)) {extra_where} ORDER BY c.created_at DESC",
                         parameters=[
                             {
                                 "name": "@phone_number",
@@ -264,7 +290,7 @@ class CosmosDbStore(IStore):
         if call:
             await self._cache.set(
                 key=cache_key,
-                ttl_sec=await callback_timeout_hour(),
+                ttl_sec=timeout * 60 * 60,  # Ensure at least 1 hour
                 value=call.model_dump_json(),
             )
 

@@ -69,13 +69,13 @@ async def test_transaction(
     """
     db = CONFIG.database.instance()
 
-    # Check not exists
-    assume(not await db.call_get(call.call_id))
-
-    # Insert call
-    await db.call_create(call)
-
     async with Scheduler() as scheduler:
+        # Check not exists
+        assume(not await db.call_get(call.call_id))
+
+        # Insert call
+        await db.call_create(call)
+
         # Check first change
         async with db.call_transac(
             call=call,
@@ -101,6 +101,6 @@ async def test_transaction(
         # Check first string change
         assume(call.voice_id == random_text)
 
-    # Check point read
-    new_call = await db.call_get(call.call_id)
-    assume(new_call and new_call.voice_id == random_text and new_call.in_progress)
+        # Check point read
+        new_call = await db.call_get(call.call_id)
+        assume(new_call and new_call.voice_id == random_text and new_call.in_progress)

@@ -7,9 +7,10 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from functools import cache
+from functools import cache, wraps
 from inspect import getmembers, isfunction
 from textwrap import dedent
+from types import FunctionType
 from typing import Annotated, Any, ForwardRef, TypeVar
 
 from aiojobs import Scheduler
@@ -25,8 +26,9 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic._internal._typing_extra import eval_type_lenient
 from pydantic.json_schema import JsonSchemaValue
 
+from app.helpers.cache import async_lru_cache
 from app.helpers.logging import logger
-from app.helpers.monitoring import SpanAttributes, span_attribute, tracer
+from app.helpers.monitoring import SpanAttributeEnum, tracer
 from app.models.call import CallStateModel
 from app.models.message import ToolModel
 
@@ -71,26 +73,28 @@ class AbstractPlugin:
         self.tts_callback = tts_callback
         self.tts_client = tts_client
 
+    @async_lru_cache()
     async def to_openai(
         self,
-        blacklist: set[str] | None,
+        blacklist: frozenset[str],
     ) -> list[ChatCompletionToolParam]:
         """
         Get the OpenAI SDK schema for all functions of the plugin, excluding the ones in the blacklist.
         """
+        functions = self._available_functions(frozenset(blacklist))
         return await asyncio.gather(
-            *[
-                _function_schema(arg_type, call=self.call)
-                for name, arg_type in getmembers(self.__class__, isfunction)
-                if not name.startswith("_")
-                and name != "to_openai"
-                and name not in (blacklist or set())
-            ]
+            *[_function_schema(func, call=self.call) for func in functions]
         )
 
-    @tracer.start_as_current_span("plugin_execute_tool")
-    async def execute_tool(self, tool: ToolModel) -> None:
-        functions = self._available_functions()
+    @tracer.start_as_current_span("plugin_execute")
+    async def execute(
+        self,
+        tool: ToolModel,
+        blacklist: set[str],
+    ) -> None:
+        functions = [
+            func.__name__ for func in self._available_functions(frozenset(blacklist))
+        ]
         json_str = tool.function_arguments
         name = tool.function_name
 
@@ -101,7 +105,7 @@ class AbstractPlugin:
             # Update tool
             tool.content = res
             # Enrich span
-            span_attribute(SpanAttributes.TOOL_RESULT, tool.content)
+            SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
             return
 
         # Try to fix JSON args to catch LLM hallucinations
@@ -124,12 +128,12 @@ class AbstractPlugin:
                 f"Bad arguments, available are {functions}. Please try again."
             )
             # Enrich span
-            span_attribute(SpanAttributes.TOOL_RESULT, tool.content)
+            SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
             return
 
         # Enrich span
-        span_attribute(SpanAttributes.TOOL_ARGS, json.dumps(args))
-        span_attribute(SpanAttributes.TOOL_NAME, name)
+        SpanAttributeEnum.TOOL_ARGS.attribute(json.dumps(args))
+        SpanAttributeEnum.TOOL_NAME.attribute(name)
 
         # Execute the function
         try:
@@ -138,13 +142,8 @@ class AbstractPlugin:
             logger.info("Executed function %s (%s): %s", name, args, res_log)
 
         # Catch wrong arguments
-        except TypeError as e:
-            logger.warning(
-                "Wrong arguments for function %s: %s. Error: %s",
-                name,
-                args,
-                e,
-            )
+        except TypeError:
+            logger.exception("Wrong arguments for function %s: %s.", name, args)
             res = "Wrong arguments, please fix them and try again."
             res_log = res
 
@@ -161,18 +160,103 @@ class AbstractPlugin:
         # Update tool
         tool.content = res
         # Enrich span
-        span_attribute(SpanAttributes.TOOL_RESULT, tool.content)
+        SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
 
     @cache
-    def _available_functions(self) -> list[str]:
+    def _available_functions(
+        self,
+        blacklist: frozenset[str],
+    ) -> list[FunctionType]:
         """
         List all available functions of the plugin, including the inherited ones.
         """
-        return [name for name, _ in getmembers(self.__class__, isfunction)]
+        return [
+            func
+            for name, func in getmembers(self.__class__, isfunction)
+            if not name.startswith("_")
+            and name not in [func.__name__ for func in [self.to_openai, self.execute]]
+            and name not in blacklist
+        ]
+
+
+def add_customer_response(
+    response_examples: list[str],
+    before: bool = True,
+):
+    """
+    Decorator to add a customer response to a tool.
+
+    Examples are used to generate the tool prompt.
+
+    Example:
+
+    ```python
+    @add_customer_response(
+        response_examples=[
+            "I updated the contact information.",
+            "I changed the address.",
+        ],
+    )
+    async def update_contact_information(...) -> str:
+        # ...
+        return "Contact information updated."
+    """
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(
+            self: AbstractPlugin,
+            *args,
+            customer_response: str,
+            **kwargs,
+        ):
+            # If before, execute all in parallel
+            if before:
+                _, res = await asyncio.gather(
+                    self.tts_callback(customer_response),
+                    func(self, *args, **kwargs),
+                )
+
+            # If after, call context should change, so execute sequentially
+            else:
+                res = await func(self, *args, **kwargs)
+                await self.tts_callback(customer_response)
+
+            return res
+
+        # Update the signature of the function
+        func.__signature__ = inspect.signature(func).replace(
+            parameters=[
+                *inspect.signature(func).parameters.values(),
+                inspect.Parameter(
+                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    name="customer_response",
+                    annotation=Annotated[
+                        str,
+                        f"""
+                        Phrase used to confirm the update, in the same language as the customer. This phrase will be spoken to the user.
+
+                        # Rules
+                        - Action should be rephrased in the present tense
+                        - Must be in a single short sentence
+                        - Use simple language
+
+                        # Examples
+                        {"\n- ".join(response_examples)}
+                        """,
+                    ],
+                ),
+            ]
+        )
+
+        return wrapper
+
+    return decorator
 
 
 async def _function_schema(
-    f: Callable[..., Any], **kwargs: Any
+    f: Callable[..., Any],
+    **kwargs: Any,
 ) -> ChatCompletionToolParam:
     """
     Take a function and return a JSON schema for it as defined by the OpenAI API.

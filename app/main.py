@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from base64 import b64decode, b64encode
 from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
@@ -59,7 +60,13 @@ from app.helpers.call_utils import ContextEnum as CallContextEnum
 from app.helpers.config import CONFIG
 from app.helpers.http import aiohttp_session, azure_transport
 from app.helpers.logging import logger
-from app.helpers.monitoring import SpanAttributes, span_attribute, tracer
+from app.helpers.monitoring import (
+    SpanAttributeEnum,
+    call_frames_in_latency,
+    call_frames_out_latency,
+    gauge_set,
+    tracer,
+)
 from app.helpers.pydantic_types.phone_numbers import PhoneNumber
 from app.helpers.resources import resources_dir
 from app.models.call import CallGetModel, CallInitiateModel, CallStateModel
@@ -354,12 +361,16 @@ async def call_get(call_id_or_phone_number: str) -> CallGetModel:
 
     # Second, try to get by phone number
     phone_number = PhoneNumber(call_id_or_phone_number)
-    call = await _db.call_search_one(phone_number=phone_number)
+    call = await _db.call_search_one(
+        callback_timeout=False,
+        phone_number=phone_number,
+    )
     if not call:
         raise HTTPException(
             detail=f"Call {call_id_or_phone_number} not found",
             status_code=HTTPStatus.NOT_FOUND,
         )
+
     return TypeAdapter(CallGetModel).dump_python(call)
 
 
@@ -388,8 +399,8 @@ async def call_post(request: Request) -> CallGetModel:
     )
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(call.call_id))
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, call.initiate.phone_number)
+    SpanAttributeEnum.CALL_ID.attribute(str(call.call_id))
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
 
     # Init SDK
     automation_client = await _use_automation_client()
@@ -443,8 +454,8 @@ async def call_event(
     callback_url, wss_url, _call = await _communicationservices_urls(phone_number)
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(_call.call_id))
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, _call.initiate.phone_number)
+    SpanAttributeEnum.CALL_ID.attribute(str(_call.call_id))
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(_call.initiate.phone_number)
 
     # Execute business logic
     await on_new_call(
@@ -481,16 +492,20 @@ async def sms_event(
     phone_number: str = event.data["from"]
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, phone_number)
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(phone_number)
 
-    # Get call
-    call = await _db.call_search_one(phone_number)
-    if not call:
-        logger.warning("Call for phone number %s not found", phone_number)
-        return
+    async with get_scheduler() as scheduler:
+        # Get call
+        call = await _db.call_search_one(
+            callback_timeout=False,
+            phone_number=phone_number,
+        )
+        if not call:
+            logger.warning("Call for phone number %s not found", phone_number)
+            return
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(call.call_id))
+    SpanAttributeEnum.CALL_ID.attribute(str(call.call_id))
 
     async with get_scheduler() as scheduler:
         # Execute business logic
@@ -538,7 +553,7 @@ async def _communicationservices_validate_call_id(
     secret: str,
 ) -> CallStateModel:
     # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(call_id))
+    SpanAttributeEnum.CALL_ID.attribute(str(call_id))
 
     # Validate call
     call = await _db.call_get(call_id)
@@ -556,7 +571,7 @@ async def _communicationservices_validate_call_id(
         )
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, call.initiate.phone_number)
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
 
     return call
 
@@ -589,29 +604,50 @@ async def communicationservices_wss_post(
         Consume audio data from the WebSocket.
         """
         logger.debug("Audio data consumer started")
+
+        # Loop until the WebSocket is disconnected
         with suppress(WebSocketDisconnect):
+            start: float | None = None
             async for event in websocket.iter_json():
                 # TODO: Handle configuration event (audio format, sample rate, etc.)
                 # Skip non-audio events
                 if "kind" not in event or event["kind"] != "AudioData":
                     continue
+
                 # Filter out silent audio
                 audio_data: dict[str, Any] = event.get("audioData", {})
                 audio_base64: str | None = audio_data.get("data", None)
                 audio_silent: bool | None = audio_data.get("silent", True)
                 if audio_silent or not audio_base64:
                     continue
+
                 # Queue audio
                 await audio_in.put(b64decode(audio_base64))
+
+                # Report the frames in latency and reset the timer
+                if start:
+                    gauge_set(
+                        metric=call_frames_in_latency,
+                        value=time.monotonic() - start,
+                    )
+                start = time.monotonic()
+
+        logger.debug("Audio data consumer stopped")
 
     async def _send_audio() -> None:
         """
         Send audio data to the WebSocket
         """
         logger.debug("Audio data sender started")
+
+        # Loop until the WebSocket is disconnected
         with suppress(WebSocketDisconnect):
+            start: float | None = None
             while True:
+                # Get audio
                 audio_data = await audio_out.get()
+                audio_out.task_done()
+
                 # Send audio
                 if isinstance(audio_data, bytes):
                     await websocket.send_json(
@@ -622,15 +658,26 @@ async def communicationservices_wss_post(
                             },
                         }
                     )
+
                 # Stop audio
                 elif audio_data is False:
+                    logger.debug("Stop audio event received, stopping audio")
                     await websocket.send_json(
                         {
                             "kind": "StopAudio",
                             "stopAudio": {},
                         }
                     )
-                audio_out.task_done()
+
+                # Report the frames out latency and reset the timer
+                if start:
+                    gauge_set(
+                        metric=call_frames_out_latency,
+                        value=time.monotonic() - start,
+                    )
+                start = time.monotonic()
+
+        logger.debug("Audio data sender stopped")
 
     async with get_scheduler() as scheduler:
         await asyncio.gather(
@@ -641,8 +688,6 @@ async def communicationservices_wss_post(
             # Process audio
             # TODO: Dynamically set the audio format
             on_audio_connected(
-                audio_bits_per_sample=16,
-                audio_channels=1,
                 audio_in=audio_in,
                 audio_out=audio_out,
                 audio_sample_rate=16000,
@@ -848,8 +893,8 @@ async def training_event(
     call = CallStateModel.model_validate_json(training.content)
 
     # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(call.call_id))
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, call.initiate.phone_number)
+    SpanAttributeEnum.CALL_ID.attribute(str(call.call_id))
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
 
     logger.debug("Training event received")
 
@@ -866,20 +911,19 @@ async def post_event(
 
     Queue message is the UUID of a call. The event will load asynchroniously the `on_end_call` workflow.
     """
-    # Validate call
-    call = await _db.call_get(UUID(post.content))
-    if not call:
-        logger.warning("Call %s not found", post.content)
-        return
-
-    # Enrich span
-    span_attribute(SpanAttributes.CALL_ID, str(call.call_id))
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, call.initiate.phone_number)
-
-    logger.debug("Post event received")
-
     async with get_scheduler() as scheduler:
+        # Validate call
+        call = await _db.call_get(UUID(post.content))
+        if not call:
+            logger.warning("Call %s not found", post.content)
+            return
+
+        # Enrich span
+        SpanAttributeEnum.CALL_ID.attribute(str(call.call_id))
+        SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
+
         # Execute business logic
+        logger.debug("Post event received")
         await on_end_call(
             call=call,
             scheduler=scheduler,
@@ -956,18 +1000,24 @@ async def twilio_sms_post(
     Returns a 200 OK if the SMS is properly formatted. Otherwise, returns a 400 Bad Request.
     """
     # Enrich span
-    span_attribute(SpanAttributes.CALL_PHONE_NUMBER, From)
+    SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(From)
 
-    # Get call
-    call = await _db.call_search_one(From)
+    async with get_scheduler() as scheduler:
+        # Get call
+        call = await _db.call_search_one(
+            callback_timeout=False,
+            phone_number=From,
+        )
 
-    if not call:
-        logger.warning("Call for phone number %s not found", From)
-    else:
-        # Enrich span
-        span_attribute(SpanAttributes.CALL_ID, str(call.call_id))
+        # Call not found
+        if not call:
+            logger.warning("Call for phone number %s not found", From)
 
-        async with get_scheduler() as scheduler:
+        # Call found
+        else:
+            # Enrich span
+            SpanAttributeEnum.CALL_ID.attribute(str(call.call_id))
+
             # Execute business logic
             event_status = await on_sms_received(
                 call=call,
@@ -975,12 +1025,12 @@ async def twilio_sms_post(
                 scheduler=scheduler,
             )
 
-        # Return error for unsuccessful event
-        if not event_status:
-            raise HTTPException(
-                detail="SMS event failed",
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+            # Return error for unsuccessful event
+            if not event_status:
+                raise HTTPException(
+                    detail="SMS event failed",
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
 
     # Default response
     return Response(
