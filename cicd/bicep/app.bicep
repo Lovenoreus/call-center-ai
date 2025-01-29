@@ -72,24 +72,14 @@ var config = {
   }
   llm: {
     fast: {
-      mode: 'azure_openai'
-      azure_openai: {
-        context: llmFastContext
-        deployment: llmFast.name
-        endpoint: cognitiveOpenai.properties.endpoint
-        model: llmFastModel
-        streaming: true
-      }
+      context: llmFastContext
+      endpoint: '${cognitiveOpenai.properties.endpoint}/openai/deployments/${llmFast.name}'
+      model: llmFastModel
     }
     slow: {
-      mode: 'azure_openai'
-      azure_openai: {
-        context: llmSlowContext
-        deployment: llmSlow.name
-        endpoint: cognitiveOpenai.properties.endpoint
-        model: llmSlowModel
-        streaming: true
-      }
+      context: llmSlowContext
+      endpoint: '${cognitiveOpenai.properties.endpoint}/openai/deployments/${llmSlow.name}'
+      model: llmSlowModel
     }
   }
   ai_search: {
@@ -504,6 +494,65 @@ resource cognitiveCommunication 'Microsoft.CognitiveServices/accounts@2024-06-01
   }
 }
 
+var aiFoundryName = '${prefix}-${openaiLocation}-foundry'
+
+resource aiFoundry 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
+  name: aiFoundryName
+  location: location
+  tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
+  kind: 'hub'
+  properties: {
+    applicationInsights: applicationInsights.id
+    friendlyName: appName
+  }
+
+  resource aiServicesConnection 'connections@2024-10-01' = {
+    name: '${aiFoundryName}-connection-openai'
+    properties: {
+      authType: 'AAD'
+      category: 'AzureOpenAI'
+      isSharedToAll: true
+      target: cognitiveOpenai.properties.endpoint
+      metadata: {
+        ApiType: 'Azure'
+        ResourceId: cognitiveOpenai.id
+      }
+    }
+  }
+}
+
+// Log Analytics Contributor
+resource roleLogAnalyticsContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  name: '92aaf0da-9dab-42b6-94a3-d43ce8d16293'
+}
+
+resource assignmentsAiProjectLogAnalyticsContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(subscription().id, prefix, aiProject.name, 'assignmentsAiProjectLogAnalyticsContributor')
+  scope: logAnalytics
+  properties: {
+    principalId: aiProject.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: roleLogAnalyticsContributor.id
+  }
+}
+
+resource aiProject 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
+  name: appName
+  location: location
+  tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
+  kind: 'project'
+  properties: {
+    friendlyName: appName
+    hubResourceId: aiFoundry.id
+  }
+}
+
 // Cognitive Services OpenAI Contributor
 resource roleOpenaiContributor 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
   name: 'a001fd3d-188f-4b5d-821b-7da978bf7442'
@@ -900,8 +949,8 @@ resource assignmentAppConfigurationDataReader 'Microsoft.Authorization/roleAssig
 
 resource configValues 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = [
   for item in items({
-    answer_hard_timeout_sec: 180
-    answer_soft_timeout_sec: 30
+    answer_hard_timeout_sec: 40
+    answer_soft_timeout_sec: 15
     callback_timeout_hour: 3
     phone_silence_timeout_sec: 20
     recognition_retry_max: 2

@@ -15,7 +15,7 @@ from app.models.call import CallInitiateModel, CallStateModel
 from app.models.message import MessageModel, PersonaEnum as MessagePersonaEnum
 from tests.conftest import CallAutomationClientMock, SpeechSynthesizerMock
 
-_db = CONFIG.database.instance()
+_db = CONFIG.database.instance
 
 
 async def main() -> None:
@@ -95,6 +95,7 @@ async def main() -> None:
                 call.messages.append(
                     MessageModel(
                         content=speech,
+                        lang_short_code=call.lang.short_code,
                         persona=MessagePersonaEnum.HUMAN,
                     )
                 )

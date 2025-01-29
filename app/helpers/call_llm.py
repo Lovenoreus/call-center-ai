@@ -9,7 +9,6 @@ from azure.cognitiveservices.speech import (
     SpeechSynthesizer,
 )
 from azure.communication.callautomation.aio import CallAutomationClient
-from openai import APIError
 
 from app.helpers.call_utils import (
     AECStream,
@@ -50,7 +49,7 @@ from app.models.message import (
     extract_message_style,
 )
 
-_db = CONFIG.database.instance()
+_db = CONFIG.database.instance
 
 
 # TODO: Refacto, this function is too long
@@ -197,12 +196,13 @@ async def load_llm_chat(  # noqa: PLR0913
                 call.messages.append(
                     MessageModel(
                         content=stt_text,
+                        lang_short_code=call.lang.short_code,
                         persona=MessagePersonaEnum.HUMAN,
                     )
                 )
 
-            # Process the response and wait for latency metrics
-            await _commit_answer(wait=False)
+            # Process the response and wait for it to be able to kill the task if needed
+            await _commit_answer(wait=True)
 
         # First call
         if len(call.messages) <= 1:
@@ -215,7 +215,7 @@ async def load_llm_chat(  # noqa: PLR0913
             )
         # User is back
         else:
-            # Welcome with the LLM, do not use the end call tool for the first message, LLM hallucinates it and this is extremely frustrating for the user
+            # Welcome with the LLM, do not use the end call tool for the first message, LLM hallucinates it and this is extremely frustrating for the user, don't wait for the response to start the VAD quickly
             await _commit_answer(
                 tool_blacklist={"end_call"},
                 wait=False,
@@ -427,7 +427,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
 
 # TODO: Refacto, this function is too long
 @tracer.start_as_current_span("call_generate_chat_completion")
-async def _generate_chat_completion(  # noqa: PLR0913, PLR0911, PLR0912, PLR0915
+async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     call: CallStateModel,
     client: CallAutomationClient,
     post_callback: Callable[[CallStateModel], Awaitable[None]],
@@ -492,25 +492,46 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0911, PLR0912, PLR0915
         tools = await plugins.to_openai(frozenset(tool_blacklist))
         # logger.debug("Tools: %s", tools)
 
+    # Translate messages to avoid LLM hallucinations
+    # See: https://github.com/microsoft/call-center-ai/issues/260
+    translated_messages = await asyncio.gather(
+        *[message.translate(call.lang.short_code) for message in call.messages]
+    )
+    # logger.debug("Translated messages: %s", translated_messages)
+
     # Execute LLM inference
-    maximum_tokens_reached = False
     content_buffer_pointer = 0
-    tool_calls_buffer: dict[int, MessageToolModel] = {}
+    last_buffered_tool_id = None
+    maximum_tokens_reached = False
+    tool_calls_buffer: dict[str, MessageToolModel] = {}
     try:
+        # Consume the completion stream
         async for delta in completion_stream(
             max_tokens=160,  # Lowest possible value for 90% of the cases, if not sufficient, retry will be triggered, 100 tokens ~= 75 words, 20 words ~= 1 sentence, 6 sentences ~= 160 tokens
-            messages=call.messages,
+            messages=translated_messages,
             system=system,
             tools=tools,
         ):
-            if not delta.content:
-                for piece in delta.tool_calls or []:
-                    tool_calls_buffer[piece.index] = tool_calls_buffer.get(
-                        piece.index, MessageToolModel()
-                    )
-                    tool_calls_buffer[piece.index] += piece
-            else:
-                # Store whole content
+            # Complete tools
+            if delta.tool_calls:
+                for piece in delta.tool_calls:
+                    # Azure AI Inference sometimes returns empty tool IDs, in that case, use the last one
+                    if piece.id:
+                        last_buffered_tool_id = piece.id
+                    # No tool ID, alert and skip
+                    if not last_buffered_tool_id:
+                        logger.warning(
+                            "Empty tool ID, cannot buffer tool call: %s", piece
+                        )
+                        continue
+                    # New, init buffer
+                    if last_buffered_tool_id not in tool_calls_buffer:
+                        tool_calls_buffer[last_buffered_tool_id] = MessageToolModel()
+                    # Append
+                    tool_calls_buffer[last_buffered_tool_id].add_delta(piece)
+
+            # Complete content
+            if delta.content:
                 content_full += delta.content
                 for sentence, length in tts_sentence_split(
                     content_full[content_buffer_pointer:], False
@@ -522,10 +543,6 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0911, PLR0912, PLR0915
     except MaximumTokensReachedError:
         logger.warning("Maximum tokens reached for this completion, retry asked")
         maximum_tokens_reached = True
-    # Retry on API error
-    except APIError as e:
-        logger.warning("OpenAI API call error: %s", e)
-        return True, True, call  # Error, retry
     # Last user message is trash, remove it
     except SafetyCheckError as e:
         logger.warning("Safety Check error: %s", e)

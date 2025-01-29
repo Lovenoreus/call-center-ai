@@ -20,9 +20,9 @@ from app.models.message import (
 from app.models.reminder import ReminderModel
 from app.models.training import TrainingModel
 
-_db = CONFIG.database.instance()
-_search = CONFIG.ai_search.instance()
-_sms = CONFIG.sms.instance()
+_db = CONFIG.database.instance
+_search = CONFIG.ai_search.instance
+_sms = CONFIG.sms.instance
 
 
 class UpdateClaimDict(TypedDict):
@@ -98,8 +98,7 @@ class DefaultPlugin(AbstractPlugin):
                         content="",
                         persona=MessagePersonaEnum.HUMAN,
                     ),
-                    # Reinsert the last message, using more will add the user message asking to create the new claim and the assistant can loop on it sometimes
-                    self.call.messages[-1],
+                    # TODO: Should it be a reminder for the last conversation subject? It would allow to keep the context of the conversation. Keeping the last message in the history is felt as weird for users (see: https://github.com/microsoft/call-center-ai/issues/397).
                 ],
             )
         )
@@ -427,6 +426,7 @@ class DefaultPlugin(AbstractPlugin):
             MessageModel(
                 action=MessageActionEnum.SMS,
                 content=message,
+                lang_short_code=self.call.lang.short_code,
                 persona=MessagePersonaEnum.ASSISTANT,
             )
         )
@@ -519,7 +519,7 @@ class DefaultPlugin(AbstractPlugin):
 
         # Update lang
         initial_lang = self.call.lang.short_code
-        self.call.lang = lang
+        self.call.lang_short_code = lang
 
         # LLM confirmation
         return f"Voice language set to {lang} (was {initial_lang})"

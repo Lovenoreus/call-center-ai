@@ -120,10 +120,6 @@ class CallStateModel(CallGetModel, extra="ignore"):
             )
         return default
 
-    @lang.setter
-    def lang(self, short_code: str) -> None:
-        self.lang_short_code = short_code
-
     async def trainings(self, cache_only: bool = True) -> list[TrainingModel]:
         """
         Get the trainings from the last messages.
@@ -134,7 +130,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
         from app.helpers.monitoring import tracer
 
         with tracer.start_as_current_span("call_trainings"):
-            search = CONFIG.ai_search.instance()
+            search = CONFIG.ai_search.instance
             tasks = await asyncio.gather(
                 *[
                     search.training_search_all(
