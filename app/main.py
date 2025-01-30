@@ -481,7 +481,7 @@ async def call_event(
 
     Queue message is a JSON object `EventGridEvent` with an event type of `AcsIncomingCallEventName`.
     """
-    logger.debug(f'Starting Call Event for call: {call}')
+    logger.debug(f'Starting Call Event for call')
 
     # Parse event
     event = EventGridEvent.from_json(call.content)
@@ -631,7 +631,7 @@ async def _communicationservices_validate_call_id(
     # Enrich span
     SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
 
-    logger.debug(f'return call: {call}')
+    logger.debug(f'return call')
 
     return call
 
@@ -673,10 +673,10 @@ async def communicationservices_wss_post(
         with suppress(WebSocketDisconnect):
             start: float | None = None
 
+            logger.debug(f'Websocket consume audio event')
+
             # An async for loop.
             async for event in websocket.iter_json():
-                logger.debug(f'Websocket consume audio event')
-
                 # TODO: Handle configuration event (audio format, sample rate, etc.)
                 # Skip non-audio events
                 if "kind" not in event or event["kind"] != "AudioData":
@@ -704,7 +704,7 @@ async def communicationservices_wss_post(
                         value=time.monotonic() - start,
                     )
 
-                    logger.debug(f'Metric set')
+                    # logger.debug(f'Metric set')
 
                 start = time.monotonic()
 
@@ -724,7 +724,7 @@ async def communicationservices_wss_post(
                 # Get audio
                 audio_data = await audio_out.get()
 
-                logger.debug(f'Audio send audio data here')
+                # logger.debug(f'Audio send audio data here')
 
                 # Mark the audio out task as done.
                 audio_out.task_done()
@@ -765,7 +765,6 @@ async def communicationservices_wss_post(
                 start = time.monotonic()
 
         logger.debug("Audio data sender stopped")
-
 
     logger.debug('func call: communicationservices_wss_post-_consume_audio')
     logger.debug('func call: communicationservices_wss_post-_send_audio')
@@ -1065,7 +1064,7 @@ async def _communicationservices_urls(
     call = await _db.call_search_one(phone_number)
 
     if call:
-        logger.debug(f'Found call: {call}')
+        logger.debug(f'Found call')
 
     # Create new call if initiate is different
     if not call or (initiate and call.initiate != initiate):
@@ -1080,7 +1079,7 @@ async def _communicationservices_urls(
                 )
             )
         )
-        logger.debug(f'New Call: {call}')
+        logger.debug(f'New Call')
 
     logger.debug(f'Formatting the urls!')
 

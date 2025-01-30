@@ -246,7 +246,7 @@ class CosmosDbStore(IStore):
 
         await self._cache.delete(cache_key_phone_number)
 
-        logger.debug(f'returning call: {call}')
+        logger.debug(f'returning call')
 
         return call
 

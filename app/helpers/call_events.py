@@ -134,7 +134,7 @@ async def on_call_connected(
         ),  # Second, start recording the call
     )
 
-    logger.debug(f'Updating the call: {call} to in progress!')
+    logger.debug(f'Updating the call to in progress!')
 
     # Add define the call as in progress
     async with _db.call_transac(
