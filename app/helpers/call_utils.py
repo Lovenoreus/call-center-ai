@@ -469,6 +469,8 @@ async def handle_hangup(
     """
     logger.info("Hanging up")
 
+    # TODO: THE FOLLOWING CODE DOES NOT RUN DUE TO _DETECT_HANGUP
+    #  NOT RAISING THE PROPER EXCEPTION.
     with (
         # Suppress hangup exception
         suppress(CallHangupException),
@@ -573,8 +575,8 @@ def _detect_hangup() -> Generator[None, None, None]:
     instead of the Call Automation SDK exceptions.
     """
     try:
-        logger.debug('Call hangup detected.')
-        logger.debug('This could be where our call does not hang up')
+        logger.debug('Call hangup detecting.')
+        # logger.debug('This could be where our call does not hang up')
         # Probably does not raise the correct exception.
         # The exception being suppressed is the CallHangupException.
         # We need to understand what we can do, to guarantee us
@@ -594,7 +596,7 @@ def _detect_hangup() -> Generator[None, None, None]:
             raise CallHangupException
 
         # Added by Godlove.
-        # elif "Timeout connecting to server" in e.message.lower():
+        # elif "Timeout connecting to server" in e.message.lower() and not call.in_progress:
         #     logger.debug(f"Call hung up")
         #     logger.debug(f"CallHangupException raised")
         #
