@@ -337,7 +337,7 @@ class LlmModel(BaseModel):
             StyleEnum as MessageStyleEnum,
         )
 
-        logger.debug(f'Getting chat system prompts')
+        self.logger.debug(f'Getting chat system prompts')
 
         return self._messages(
             self._format(
@@ -467,7 +467,7 @@ class LlmModel(BaseModel):
                 content=system,
             ),
         ]
-        # self.logger.debug("Messages: %s", messages)
+        self.logger.debug("Messages: %s", messages)
         return messages
 
     @cached_property
@@ -546,7 +546,7 @@ class TtsModel(BaseModel):
         )
 
     async def hello(self, call: CallStateModel) -> str:
-        logger.debug(f'Getting hello TTS from TtsModel')
+        self.logger.debug(f'Getting hello TTS from TtsModel')
 
         return await self._translate(
             self.hello_tpl,
@@ -578,7 +578,7 @@ class TtsModel(BaseModel):
         """
         Remove possible indentation in a string.
         """
-        logger.debug(f'Selecting random prompt template')
+        self.logger.debug(f'Selecting random prompt template')
         # Select a random prompt template
         prompt_tpl = random.choice(prompt_tpls)
 
@@ -597,7 +597,7 @@ class TtsModel(BaseModel):
             translate_text,
         )
 
-        logger.debug(f'Translating prompt to TTS language')
+        self.logger.debug(f'Translating prompt to TTS language')
 
         initial = self._return(prompt_tpls, **kwargs)
 

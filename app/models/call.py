@@ -23,6 +23,9 @@ from app.models.reminder import ReminderModel
 from app.models.synthesis import SynthesisModel
 from app.models.training import TrainingModel
 
+from functools import cached_property
+from logging import Logger
+
 
 class CallInitiateModel(WorkflowInitiateModel):
     phone_number: PhoneNumber
@@ -43,6 +46,12 @@ class CallGetModel(BaseModel):
     reminders: list[ReminderModel] = []
     synthesis: SynthesisModel | None = None
 
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
+
     @field_validator("claim")
     @classmethod
     def _validate_claim(
@@ -52,6 +61,7 @@ class CallGetModel(BaseModel):
         Validate the claim field against the initiate data model.
         """
         initiate: CallInitiateModel | None = info.data.get("initiate", None)
+
         if not initiate:
             return {}
         return (
@@ -76,6 +86,7 @@ class CallGetModel(BaseModel):
 
         # Iterate over the messages
         merged: list[MessageModel] = [messages[0]]
+
         for new_message in messages[1:]:
             # If the last message is not from the same persona or action, keep it as is
             last = merged[-1]
@@ -88,6 +99,7 @@ class CallGetModel(BaseModel):
             # Merge the content and tool calls
             last.content = (last.content + " " + new_message.content).strip()
             last.tool_calls = list({*last.tool_calls, *new_message.tool_calls})
+
             # Override the style
             last.style = new_message.style
 
@@ -95,7 +107,6 @@ class CallGetModel(BaseModel):
 
 
 class CallStateModel(CallGetModel, extra="ignore"):
-    logger.debug(f'Starting CallStateModel')
 
     # Immutable fields
     callback_secret: str = Field(
@@ -110,11 +121,18 @@ class CallStateModel(CallGetModel, extra="ignore"):
     recognition_retry: int = 0
     voice_id: str | None = None
 
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
+
     @property
     def lang(self) -> LanguageEntryModel:  # pyright: ignore
-        logger.debug(f'Setting the language. ShortCode: {short_code}')
+        self.logger.debug(f'Setting the language. ShortCode: {self.lang_short_code}')
 
         default = self.initiate.lang.default_lang
+
         if self.lang_short_code:
             return next(
                 (
@@ -125,7 +143,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
                 default,
             )
 
-        logger.debug(f'Language method returns: {default}')
+        self.logger.debug(f'Language method returns: {default}')
 
         return default
 
@@ -138,7 +156,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
         from app.helpers.config import CONFIG
         from app.helpers.monitoring import tracer
 
-        logger.debug(f'Getting last messages trainings')
+        self.logger.debug(f'Getting last messages trainings')
 
         with tracer.start_as_current_span("call_trainings"):
             search = CONFIG.ai_search.instance
@@ -166,7 +184,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
                 )
             )  # Flatten, remove duplicates, sort by score, filter by strictness
 
-            logger.debug(f'Returns training: {trainings}')
+            self.logger.debug(f'Returns training: {trainings}')
 
             return trainings
 
@@ -180,7 +198,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
         """
         Get the last assistant message style.
         """
-        logger.debug(f'Setting the timezone of phone number.')
+        self.logger.debug(f'Setting the timezone of phone number.')
 
         inverted_messages = self.messages.copy()
         inverted_messages.reverse()
@@ -196,7 +214,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
 
         An interaction is defined as a call with a human message.
         """
-        logger.debug(f'Checking for call interaction')
+        self.logger.debug(f'Checking for call interaction')
 
         return not (
             len(self.messages) >= 3  # noqa: PLR2004

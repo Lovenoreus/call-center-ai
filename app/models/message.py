@@ -13,6 +13,9 @@ from azure.ai.inference.models import (
 )
 from pydantic import BaseModel, Field, field_validator
 
+from functools import cached_property
+from logging import Logger
+
 _FUNC_NAME_SANITIZER_R = r"[^a-zA-Z0-9_-]"
 _MESSAGE_ACTION_R = r"(?:action=*([a-z_]*))? *(.*)"
 _MESSAGE_STYLE_R = r"(?:style=*([a-z_]*))? *(.*)"
@@ -58,6 +61,12 @@ class ToolModel(BaseModel):
     function_arguments: str = ""
     function_name: str = ""
     tool_id: str = ""
+
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
 
     @property
     def is_openai_valid(self) -> bool:
@@ -120,6 +129,12 @@ class MessageModel(BaseModel):
     style: StyleEnum = StyleEnum.NONE
     tool_calls: list[ToolModel] = []
 
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
+
     async def translate(self, target_short_code: str) -> "MessageModel":
         """
         Translate the message to a target language.
@@ -128,21 +143,21 @@ class MessageModel(BaseModel):
         """
         from app.helpers.translation import translate_text
 
-        logger.debug(f'MessageModel.translate invoked.')
+        self.logger.debug(f'MessageModel.translate invoked.')
 
         # Work on a copy to avoid modifying the original model in the database
         copy = self.model_copy()
 
         # Skip if no language is set
         if not self.lang_short_code:
-            logger.debug(f'No language is set.')
+            self.logger.debug(f'No language is set.')
 
-            logger.debug(f'Returning copy: {copy}')
+            self.logger.debug(f'Returning copy: {copy}')
 
             return copy
 
         # Apply translation
-        logger.debug(f'Applying translation.')
+        self.logger.debug(f'Applying translation.')
 
         translation = await translate_text(
             source_lang=self.lang_short_code,
@@ -150,15 +165,15 @@ class MessageModel(BaseModel):
             text=self.content,
         )
 
-        logger.debug(f'Translation: {translation}')
+        self.logger.debug(f'Translation: {translation}')
 
         if translation:
             copy.content = translation
             copy.lang_short_code = target_short_code
 
-            logger.debug(f'Modifying translation. New is: {copy}')
+            self.logger.debug(f'Modifying translation. New is: {copy}')
 
-        logger.debug(f'Returning copy: {copy}')
+        self.logger.debug(f'Returning copy: {copy}')
 
         return copy
 
@@ -186,11 +201,11 @@ class MessageModel(BaseModel):
         # Removing newlines from the content to avoid hallucinations issues with GPT-4 Turbo
         content = " ".join([line.strip() for line in self.content.splitlines()])
 
-        logger.debug(f'Chat completion. Content: {content}')
+        self.logger.debug(f'Chat completion. Content: {content}')
 
         # Init content for human persona
         if self.persona == PersonaEnum.HUMAN:
-            logger.debug(f'Human chat: action={self.action.value} {content}')
+            self.logger.debug(f'Human chat: action={self.action.value} {content}')
 
             return [
                 UserMessage(
@@ -201,7 +216,7 @@ class MessageModel(BaseModel):
         # Init content for assistant persona
         if self.persona == PersonaEnum.ASSISTANT:
             if not self.tool_calls:
-                logger.debug(f'Assistant chat: action={self.action.value} style={self.style.value} {content}')
+                self.logger.debug(f'Assistant chat: action={self.action.value} style={self.style.value} {content}')
 
                 return [
                     AssistantMessage(
@@ -209,14 +224,14 @@ class MessageModel(BaseModel):
                     )
                 ]
 
-        logger.debug(f'Assistant persona with tools')
+        self.logger.debug(f'Assistant persona with tools')
 
         # Add tools
         valid_tools = [
             tool_call for tool_call in self.tool_calls if tool_call.is_openai_valid
         ]
 
-        logger.debug(f'Valid tools: {valid_tools}')
+        self.logger.debug(f'Valid tools: {valid_tools}')
 
         res = []
 
@@ -235,7 +250,7 @@ class MessageModel(BaseModel):
             if tool_call.content
         )
 
-        logger.debug(f'MessageModel returns: {res}')
+        self.logger.debug(f'MessageModel returns: {res}')
 
         return res
 

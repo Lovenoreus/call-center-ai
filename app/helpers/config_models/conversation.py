@@ -7,6 +7,9 @@ from pydantic.fields import FieldInfo
 from app.helpers.pydantic_types.phone_numbers import PhoneNumber
 from app.models.claim import ClaimFieldModel, ClaimTypeEnum
 
+from functools import cached_property
+from logging import Logger
+
 
 class LanguageEntryModel(BaseModel):
     """
@@ -19,6 +22,12 @@ class LanguageEntryModel(BaseModel):
     pronunciations_en: list[str]
     short_code: str
     voice: str
+
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
 
     @property
     def human_name(self) -> str:
@@ -35,6 +44,12 @@ class LanguageModel(BaseModel):
     """
     Manage language for the workflow.
     """
+
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
 
     default_short_code: str = "fr-FR"
     # Voice list from Azure TTS
@@ -64,6 +79,8 @@ class LanguageModel(BaseModel):
 
     @property
     def default_lang(self) -> LanguageEntryModel:
+        # self.logger.debug(f'LanguageModel')
+
         return next(
             (
                 lang
@@ -75,7 +92,11 @@ class LanguageModel(BaseModel):
 
 
 class WorkflowInitiateModel(BaseModel):
-    logger.debug(f'Defining Workflow Model!!')
+    @cached_property
+    def logger(self) -> Logger:
+        from app.helpers.logging import logger
+
+        return logger
 
     agent_phone_number: PhoneNumber
     bot_company: str
@@ -169,7 +190,7 @@ class ConversationModel(BaseModel):
 
 def _fields_to_pydantic(name: str, fields: list[ClaimFieldModel]) -> type[BaseModel]:
     field_definitions = {field.name: _field_to_pydantic(field) for field in fields}
-    logger.debug(f'func: _fields_to_pydantic')
+    # logger.debug(f'func: _fields_to_pydantic')
 
     return create_model(
         name,
@@ -184,7 +205,7 @@ def _field_to_pydantic(
     field: ClaimFieldModel,
 ) -> Annotated[Any, ...] | tuple[type, FieldInfo]:
     field_type = _type_to_pydantic(field.type)
-    logger.debug(f'func: _field_to_pydantic')
+    # logger.debug(f'func: _field_to_pydantic')
 
     return (
         field_type | None,
@@ -198,24 +219,25 @@ def _field_to_pydantic(
 def _type_to_pydantic(
     data: ClaimTypeEnum,
 ) -> type | Annotated[Any, ...]:
-    logger.debug(f'func: _type_to_pydantic')
+    # logger.debug(f'func: _type_to_pydantic')
 
     match data:
         case ClaimTypeEnum.DATETIME:
-            logger.debug(f'claim matched: datetime-{datetime}')
+            # logger.debug(f'claim matched: datetime-{datetime}')
 
             return datetime
 
         case ClaimTypeEnum.EMAIL:
-            logger.debug(f'claim matched: Email-{EmailStr}')
+            # logger.debug(f'claim matched: Email-{EmailStr}')
 
             return EmailStr
 
         case ClaimTypeEnum.PHONE_NUMBER:
-            logger.debug(f'claim matched: PhoneNumber-{PhoneNumber}')
+            # logger.debug(f'claim matched: PhoneNumber-{PhoneNumber}')
 
             return PhoneNumber
 
         case ClaimTypeEnum.TEXT:
-            logger.debug(f'claim matched: Text-{str}')
+            # logger.debug(f'claim matched: Text-{str}')
+
             return str
