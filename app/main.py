@@ -675,7 +675,7 @@ async def communicationservices_wss_post(
 
             # An async for loop.
             async for event in websocket.iter_json():
-                logger.debug(f'Websocket consume audio event: {event}')
+                logger.debug(f'Websocket consume audio event')
 
                 # TODO: Handle configuration event (audio format, sample rate, etc.)
                 # Skip non-audio events
@@ -724,7 +724,7 @@ async def communicationservices_wss_post(
                 # Get audio
                 audio_data = await audio_out.get()
 
-                logger.debug(f'Audio send audio data: {b64encode(audio_data).decode("utf-8")}')
+                logger.debug(f'Audio send audio data here')
 
                 # Mark the audio out task as done.
                 audio_out.task_done()
