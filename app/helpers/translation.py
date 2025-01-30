@@ -29,7 +29,8 @@ async def translate_text(text: str, source_lang: str, target_lang: str) -> str |
     """
     Translate text from source language to target language.
 
-    If the source and target languages are the same, the original text is returned. Catch errors for a maximum of 3 times.
+    If the source and target languages are the same, the original text is returned.
+    Catch errors for a maximum of 3 times.
     """
     # No need to translate
     if source_lang == target_lang:

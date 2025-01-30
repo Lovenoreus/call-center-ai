@@ -128,22 +128,37 @@ class MessageModel(BaseModel):
         """
         from app.helpers.translation import translate_text
 
+        logger.debug(f'MessageModel.translate invoked.')
+
         # Work on a copy to avoid modifying the original model in the database
         copy = self.model_copy()
 
         # Skip if no language is set
         if not self.lang_short_code:
+            logger.debug(f'No language is set.')
+
+            logger.debug(f'Returning copy: {copy}')
+
             return copy
 
         # Apply translation
+        logger.debug(f'Applying translation.')
+
         translation = await translate_text(
             source_lang=self.lang_short_code,
             target_lang=target_short_code,
             text=self.content,
         )
+
+        logger.debug(f'Translation: {translation}')
+
         if translation:
             copy.content = translation
             copy.lang_short_code = target_short_code
+
+            logger.debug(f'Modifying translation. New is: {copy}')
+
+        logger.debug(f'Returning copy: {copy}')
 
         return copy
 
@@ -165,13 +180,18 @@ class MessageModel(BaseModel):
         """
         Convert the message model to an OpenAI message.
 
-        Tools are validated before being added to the message, invalid ones are discarded.
+        Tools are validated before being added to the message,
+        invalid ones are discarded.
         """
         # Removing newlines from the content to avoid hallucinations issues with GPT-4 Turbo
         content = " ".join([line.strip() for line in self.content.splitlines()])
 
+        logger.debug(f'Chat completion. Content: {content}')
+
         # Init content for human persona
         if self.persona == PersonaEnum.HUMAN:
+            logger.debug(f'Human chat: action={self.action.value} {content}')
+
             return [
                 UserMessage(
                     content=f"action={self.action.value} {content}",
@@ -181,17 +201,25 @@ class MessageModel(BaseModel):
         # Init content for assistant persona
         if self.persona == PersonaEnum.ASSISTANT:
             if not self.tool_calls:
+                logger.debug(f'Assistant chat: action={self.action.value} style={self.style.value} {content}')
+
                 return [
                     AssistantMessage(
                         content=f"action={self.action.value} style={self.style.value} {content}",
                     )
                 ]
 
+        logger.debug(f'Assistant persona with tools')
+
         # Add tools
         valid_tools = [
             tool_call for tool_call in self.tool_calls if tool_call.is_openai_valid
         ]
+
+        logger.debug(f'Valid tools: {valid_tools}')
+
         res = []
+
         res.append(
             AssistantMessage(
                 content=f"action={self.action.value} style={self.style.value} {content}",
@@ -206,6 +234,9 @@ class MessageModel(BaseModel):
             for tool_call in valid_tools
             if tool_call.content
         )
+
+        logger.debug(f'MessageModel returns: {res}')
+
         return res
 
 

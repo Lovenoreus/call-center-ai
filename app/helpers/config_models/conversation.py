@@ -75,9 +75,12 @@ class LanguageModel(BaseModel):
 
 
 class WorkflowInitiateModel(BaseModel):
+    logger.debug(f'Defining Workflow Model!!')
+
     agent_phone_number: PhoneNumber
     bot_company: str
     bot_name: str
+
     claim: list[ClaimFieldModel] = [
         ClaimFieldModel(
             description="Date and time of the incident",
@@ -126,11 +129,13 @@ class WorkflowInitiateModel(BaseModel):
         ),
     ]  # Configured like in v4 for compatibility
     lang: LanguageModel = LanguageModel()  # Object is fully defined by default
+
     prosody_rate: float = Field(
         default=1.0,
         ge=0.75,
         le=1.25,
     )
+
     task: str = "Helping the customer to file an insurance claim. The customer is probably calling because they have a problem with something covered by their policy, but it's not certain. The assistant needs information from the customer to complete the claim. The conversation is over when all the data relevant to the case has been collected. Filling in as much information as possible is important for further processing."
 
     def claim_model(self) -> type[BaseModel]:
@@ -164,6 +169,8 @@ class ConversationModel(BaseModel):
 
 def _fields_to_pydantic(name: str, fields: list[ClaimFieldModel]) -> type[BaseModel]:
     field_definitions = {field.name: _field_to_pydantic(field) for field in fields}
+    logger.debug(f'func: _fields_to_pydantic')
+
     return create_model(
         name,
         **field_definitions,  # pyright: ignore
@@ -177,6 +184,8 @@ def _field_to_pydantic(
     field: ClaimFieldModel,
 ) -> Annotated[Any, ...] | tuple[type, FieldInfo]:
     field_type = _type_to_pydantic(field.type)
+    logger.debug(f'func: _field_to_pydantic')
+
     return (
         field_type | None,
         Field(
@@ -189,12 +198,24 @@ def _field_to_pydantic(
 def _type_to_pydantic(
     data: ClaimTypeEnum,
 ) -> type | Annotated[Any, ...]:
+    logger.debug(f'func: _type_to_pydantic')
+
     match data:
         case ClaimTypeEnum.DATETIME:
+            logger.debug(f'claim matched: datetime-{datetime}')
+
             return datetime
+
         case ClaimTypeEnum.EMAIL:
+            logger.debug(f'claim matched: Email-{EmailStr}')
+
             return EmailStr
+
         case ClaimTypeEnum.PHONE_NUMBER:
+            logger.debug(f'claim matched: PhoneNumber-{PhoneNumber}')
+
             return PhoneNumber
+
         case ClaimTypeEnum.TEXT:
+            logger.debug(f'claim matched: Text-{str}')
             return str

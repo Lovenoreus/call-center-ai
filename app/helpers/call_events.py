@@ -82,6 +82,11 @@ async def on_new_call(
             media_streaming=streaming_options,
         )
         logger.info("Answered call (%s)", answer_call_result.call_connection_id)
+
+        logger.debug("Answered call results (%s)", answer_call_result)
+
+        logger.debug(f'Returns True')
+
         return True
 
     except ClientAuthenticationError:
@@ -129,13 +134,17 @@ async def on_call_connected(
         ),  # Second, start recording the call
     )
 
+    logger.debug(f'Updating the call: {call} to in progress!')
+
     # Add define the call as in progress
     async with _db.call_transac(
         call=call,
         scheduler=scheduler,
     ):
         call.in_progress = True
+
         call.recognition_retry = 0
+
         call.messages.append(
             MessageModel(
                 action=MessageActionEnum.CALL,
@@ -158,6 +167,7 @@ async def on_call_disconnected(
     Hangs up the call and stores the final message.
     """
     logger.info("Call disconnected")
+
     await hangup_now(
         call=call,
         client=client,
@@ -182,6 +192,9 @@ async def on_audio_connected(  # noqa: PLR0913
 
     Starts the real-time conversation with the LLM.
     """
+
+    logger.debug(f'func call: on_audio_connected-load_llm_chat')
+
     await load_llm_chat(
         audio_in=audio_in,
         audio_out=audio_out,
@@ -460,17 +473,25 @@ async def on_ivr_recognized(
             (x for x in call.initiate.lang.availables if x.short_code == label),
             call.initiate.lang.default_lang,
         )
+
     except ValueError:
         logger.warning("Unknown IVR %s, code not implemented", label)
+
         return
 
     logger.info("Setting call language to %s", lang)
+
     async with _db.call_transac(
         call=call,
         scheduler=scheduler,
     ):
         call.lang_short_code = lang.short_code
+
         call.recognition_retry = 0
+
+        logger.debug(f'Call language set')
+
+    logger.debug(f'func call: on_ivr_recognized-start_audio_streaming')
 
     await start_audio_streaming(
         call=call,
@@ -746,14 +767,20 @@ async def _handle_ivr_language(
     scheduler: Scheduler,
 ) -> None:
     """
-    Handle IVR language selection.
+    Handle IVR language selection (Interactive Voice Response).
 
     If only one language is available, selects it by default. Else, plays the IVR prompt.
     """
+    logger.debug(f'Setting the language!')
+
     # If only one language is available, skip the IVR
     if len(call.initiate.lang.availables) == 1:
         short_code = call.initiate.lang.availables[0].short_code
+
         logger.info("Only one language available, selecting %s by default", short_code)
+
+        logger.debug(f'func call: _handle_ivr_language-on_ivr_recognized')
+
         await on_ivr_recognized(
             call=call,
             client=client,
@@ -762,6 +789,7 @@ async def _handle_ivr_language(
         )
         return
 
+    # Assistants tone of voice.
     tones = [
         DtmfTone.ONE,
         DtmfTone.TWO,
@@ -773,7 +801,10 @@ async def _handle_ivr_language(
         DtmfTone.EIGHT,
         DtmfTone.NINE,
     ]
+
     choices = []
+
+    # Append each language to the choices list.
     for i, lang in enumerate(call.initiate.lang.availables):
         choices.append(
             RecognitionChoice(
@@ -782,6 +813,8 @@ async def _handle_ivr_language(
                 tone=tones[i],
             )
         )
+
+    # Handle the choices.
     await handle_recognize_ivr(
         call=call,
         choices=choices,

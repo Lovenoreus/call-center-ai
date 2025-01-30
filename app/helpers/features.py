@@ -164,6 +164,7 @@ async def _default(
 
     # Return default
     logger.info("Feature %s not found, using default: %s", key, default)
+
     return _validate(
         key=key,
         max_incl=max_incl,

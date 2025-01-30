@@ -127,15 +127,20 @@ def tts_sentence_split(
 
     Returns a generator of tuples with the sentence and the original sentence length.
     """
+    logger.debug(f'Tts sentence split')
+
     # Split by sentence by punctuation
     splits = re.split(_SENTENCE_PUNCTUATION_R, text)
+
     for i, split in enumerate(splits):
         # Skip punctuation
         if i % 2 == 1:
             continue
+
         # Skip empty lines
         if not split.strip():
             continue
+
         # Skip last line in case of missing punctuation
         if i == len(splits) - 1:
             if include_last:
@@ -272,10 +277,18 @@ async def handle_realtime_tts(  # noqa: PLR0913
 
     If `store` is `True`, the text will be stored in the call messages.
     """
+    logger.debug(f'Handling realtime tts started.')
+
+    logger.debug(f'func call: handle_realtime_tts-_chunk_for_tts')
+
     # Play each chunk
     chunks = _chunk_for_tts(text)
+
     for chunk in chunks:
         logger.info("Playing TTS: %s", text)
+
+        logger.debug('func call: handle_realtime_tts-tts_client')
+
         tts_client.speak_ssml_async(
             _ssml_from_text(
                 call=call,
@@ -285,6 +298,10 @@ async def handle_realtime_tts(  # noqa: PLR0913
         )
 
     if store:
+        logger.debug(f'Storing assistant message: {text}')
+
+        logger.debug(f'func call: handle_realtime_tts-_store_assistant_message')
+
         await _store_assistant_message(
             call=call,
             style=style,
@@ -306,6 +323,8 @@ async def _store_assistant_message(
         call=call,
         scheduler=scheduler,
     ):
+        logger.debug(f'storing message in call history')
+
         call.messages.append(
             MessageModel(
                 content=text,
@@ -328,9 +347,14 @@ def _chunk_for_tts(
     text = re.sub(_TTS_SANITIZER_R, " ", text)  # Remove unwanted characters
     text = re.sub(r"\s+", " ", text)  # Remove multiple spaces
 
+    logger.debug(f'Text sanitized to: {text}')
+
     # Split text in chunks, separated by sentence
     chunks = []
     chunk = ""
+
+    logger.debug(f'func call: _chunk_for_tts-tts_sentence_split')
+
     for to_add, _ in tts_sentence_split(text, True):
         # If chunck overflows TTS capacity, start a new record
         if len(chunk) + len(to_add) >= _MAX_CHARACTERS_PER_TTS:
@@ -338,6 +362,7 @@ def _chunk_for_tts(
             chunks.append(chunk.strip())
             # Reset chunk
             chunk = ""
+
         # Add space to separate sentences
         chunk += to_add + " "
 
@@ -345,6 +370,8 @@ def _chunk_for_tts(
     if chunk:
         # Remove trailing space as sentences are separated by spaces
         chunks.append(chunk.strip())
+
+    logger.debug(f'_chunk_for_tts returns: {chunks}')
 
     return chunks
 
@@ -361,11 +388,16 @@ def _ssml_from_text(
 
     See: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-structure
     """
+    logger.debug(f'Building ssml from text')
+
     if len(text) > _MAX_CHARACTERS_PER_TTS:
         logger.warning("Text is too long to be processed by TTS, truncating, fix this!")
         text = text[:_MAX_CHARACTERS_PER_TTS]
+
     # Escape text for SSML
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    logger.debug(f'Text: {text}')
     # Build SSML tree
     ssml = f"""
     <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{call.lang.short_code}">
@@ -395,12 +427,18 @@ async def handle_recognize_ivr(
     """
     Recognize an IVR response after playing a text.
 
-    Starts by playing text, then starts recognizing the response. The recognition will be interrupted by the user if they start speaking. The recognition will be played in the call language.
+    Starts by playing text, then starts recognizing the response. The recognition will be interrupted by the user if
+    they start speaking. The recognition will be played in the call language.
     """
     logger.info("Recognizing IVR: %s", text)
+
+    logger.debug(f'Multiple IVR options')
+
     try:
         assert call.voice_id, "Voice ID is required to control the call"
+
         call_client = await _use_call_client(client, call.voice_id)
+
         await call_client.start_recognizing_media(
             choices=choices,
             input_type=RecognizeInputType.CHOICES,
@@ -414,6 +452,7 @@ async def handle_recognize_ivr(
             speech_language=call.lang.short_code,
             target_participant=PhoneNumberIdentifier(call.initiate.phone_number),  # pyright: ignore
         )
+
     except ResourceNotFoundError:
         logger.debug("Call hung up before recognizing")
 
@@ -451,9 +490,13 @@ async def handle_transfer(
     Can raise a `CallHangupException` if the call is hung up.
     """
     logger.info("Transferring call: %s", target)
+
     with _detect_hangup():
+
         assert call.voice_id, "Voice ID is required to control the call"
+
         call_client = await _use_call_client(client, call.voice_id)
+
         await call_client.transfer_call_to_participant(
             operation_context=_context_serializer({context}),
             target_participant=PhoneNumberIdentifier(target),
@@ -470,15 +513,23 @@ async def start_audio_streaming(
     Can raise a `CallHangupException` if the call is hung up.
     """
     logger.info("Starting audio streaming")
+
+    logger.debug(f'func call: start_audio_streaming-_detect_hangup')
+
     with _detect_hangup():
         assert call.voice_id, "Voice ID is required to control the call"
+
         call_client = await _use_call_client(client, call.voice_id)
+
         # TODO: Use the public API once the "await" have been fixed
         # await call_client.start_media_streaming()
+
         await call_client._call_media_client.start_media_streaming(
             call_connection_id=call_client._call_connection_id,
             start_media_streaming_request=StartMediaStreamingRequest(),
         )
+
+        logger.debug(f'Take note here!')
 
 
 async def stop_audio_streaming(
@@ -503,25 +554,34 @@ def _context_serializer(contexts: set[ContextEnum | None] | None) -> str | None:
 
     Returns `None` if no context is provided.
     """
+    logger.debug(f'Serializing Context: {contexts}')
+
     if not contexts:
         return None
+
     return json.dumps([context.value for context in contexts if context])
 
 
 @contextmanager
 def _detect_hangup() -> Generator[None, None, None]:
     """
-    Catch a call hangup and raise a `CallHangupException` instead of the Call Automation SDK exceptions.
+    Catch a call hangup and raise a `CallHangupException`
+    instead of the Call Automation SDK exceptions.
     """
     try:
         yield
+
     except ResourceNotFoundError:
         logger.debug("Call hung up")
+
         raise CallHangupException
+
     except HttpResponseError as e:
         if "call already terminated" in e.message.lower():
             logger.debug("Call hung up")
+
             raise CallHangupException
+
         else:
             raise e
 
@@ -534,6 +594,8 @@ async def _use_call_client(
     Return the call client for a given call.
     """
     logger.debug("Using Call client for %s", voice_id)
+
+    logger.debug(f'returns the call connection: {client.get_call_connection(call_connection_id=voice_id)}')
 
     return client.get_call_connection(call_connection_id=voice_id)
 
@@ -548,8 +610,11 @@ async def use_tts_client(
 
     Output format is in PCM 16-bit, 16 kHz, 1 channel.
 
-    Yields a client to push audio data to the queue. Once the context is exited, the client will stop.
+    Yields a client to push audio data to the queue.
+     Once the context is exited, the client will stop.
     """
+    logger.debug(f'Running text-to-speech client.')
+
     # Get AAD token
     aad_token = await (await token("https://cognitiveservices.azure.com/.default"))()
 
@@ -559,15 +624,19 @@ async def use_tts_client(
         endpoint=f"wss://{CONFIG.cognitive_service.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v1",
         speech_recognition_language=call.lang.short_code,
     )
+
     config.authorization_token = (
         f"aad#{CONFIG.cognitive_service.resource_id}#{aad_token}"
     )
+
     config.speech_synthesis_voice_name = call.lang.voice
     config.set_speech_synthesis_output_format(
         SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm
     )
+
     if call.lang.custom_voice_endpoint_id:
         config.endpoint_id = call.lang.custom_voice_endpoint_id
+
     # TODO: How to close the client?
     client = SpeechSynthesizer(
         speech_config=config,
@@ -584,6 +653,7 @@ class SttClient:
 
     Input format is in PCM 16-bit, 16 kHz, 1 channel.
     """
+    logger.debug(f'Running Speech-to-text client.')
 
     _call: CallStateModel
     _client: SpeechRecognizer | None = None
@@ -610,6 +680,8 @@ class SttClient:
         )
 
     async def __aenter__(self):
+        logger.debug(f'Setting up Speech-to-text client resources.')
+
         # Get AAD token
         aad_token = await (
             await token("https://cognitiveservices.azure.com/.default")
@@ -625,6 +697,8 @@ class SttClient:
             ),
         )
 
+        logger.debug(f'Activating complete and partial recognition events')
+
         # TSS events
         self._client.recognized.connect(self._complete_callback)
         self._client.recognizing.connect(self._partial_callback)
@@ -633,15 +707,19 @@ class SttClient:
         self._client.canceled.connect(
             lambda event: logger.warning("STT cancelled: %s", event)
         )
+
         self._client.session_started.connect(lambda _: logger.debug("STT started"))
         self._client.session_stopped.connect(lambda _: logger.debug("STT stopped"))
 
+        logger.debug(f'Activating continuous recognition event')
         # Start STT
         self._client.start_continuous_recognition_async()
 
         return self
 
     async def __aexit__(self, *args, **kwargs):
+        logger.debug(f'Shutting down Speech-to-text client resources.')
+
         # Stop STT
         if self._client:
             self._client.stop_continuous_recognition_async()
@@ -661,6 +739,7 @@ class SttClient:
 
         # Store the result
         self._stt_buffer[-1] = text
+
         logger.debug("Partial recognition: %s", self._stt_buffer)
 
     def _complete_callback(self, event):
@@ -696,6 +775,8 @@ class SttClient:
         # Clear the buffer
         self._stt_buffer.clear()
         self._stt_complete_gate.clear()
+
+        logger.debug(f'Clear stt buffer')
 
     async def _report_complete_latency(self) -> None:
         """
@@ -804,6 +885,8 @@ class AECStream:
         self._empty_packet: bytes = b"\x00" * self._packet_size
 
     async def __aenter__(self):
+        logger.debug(f'Setting up AECStream')
+
         self._run_task = asyncio.gather(
             self._forward_in(),
             self._forward_out(),
@@ -812,6 +895,8 @@ class AECStream:
         return self
 
     async def __aexit__(self, *args, **kwargs):
+        logger.debug(f'Tearing down AECStream')
+
         self._run_task.cancel()
 
     def _pcm_to_float(self, pcm: bytes) -> np.ndarray:

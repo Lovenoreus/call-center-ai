@@ -37,7 +37,9 @@ class LlmModel(BaseModel):
     """
 
     default_system_tpl: str = """
-        Assistant is called {bot_name} and is working in a call center for company {bot_company} as an expert with 20 years of experience. {bot_company} is a well-known and trusted company. Assistant is proud to work for {bot_company}.
+        Assistant is called {bot_name} and is working in a call center for company {bot_company} as an expert with 20
+        years of experience. {bot_company} is a well-known and trusted company. Assistant is proud to work for
+        {bot_company}.
 
         Always assist with care, respect, and truth. This is critical for the customer.
 
@@ -335,6 +337,8 @@ class LlmModel(BaseModel):
             StyleEnum as MessageStyleEnum,
         )
 
+        logger.debug(f'Getting chat system prompts')
+
         return self._messages(
             self._format(
                 self.chat_system_tpl,
@@ -450,7 +454,8 @@ class LlmModel(BaseModel):
             [line.strip() for line in formatted_prompt.splitlines()]
         )
 
-        # self.logger.debug("Formatted prompt: %s", formatted_prompt)
+        self.logger.debug("Formatted prompt: %s", formatted_prompt)
+
         return formatted_prompt
 
     def _messages(self, system: str, call: CallStateModel) -> list[SystemMessage]:
@@ -499,6 +504,7 @@ class TtsModel(BaseModel):
         "It was a pleasure assisting you today. Remember, {bot_company} is always here to help. Have a fantastic day!",
         "Thanks for reaching out! {bot_company} appreciates you. Have a great day!",
     ]
+    # TODO: Bot hello for first time call.
     hello_tpl: list[str] = [
         "Hello, I'm {bot_name}, the virtual assistant from {bot_company}! Here's how I work: while I'm processing your information, you will hear music. Feel free to speak to me in a natural way - I'm designed to understand your requests. During the conversation, you can also send me text messages.",
         "Hi there! I'm {bot_name} from {bot_company}. While I process your info, you'll hear some music. Just talk to me naturally, and you can also send text messages.",
@@ -540,6 +546,8 @@ class TtsModel(BaseModel):
         )
 
     async def hello(self, call: CallStateModel) -> str:
+        logger.debug(f'Getting hello TTS from TtsModel')
+
         return await self._translate(
             self.hello_tpl,
             call,
@@ -570,8 +578,10 @@ class TtsModel(BaseModel):
         """
         Remove possible indentation in a string.
         """
+        logger.debug(f'Selecting random prompt template')
         # Select a random prompt template
         prompt_tpl = random.choice(prompt_tpls)
+
         # Format it
         return dedent(prompt_tpl.format(**kwargs)).strip()
 
@@ -587,15 +597,21 @@ class TtsModel(BaseModel):
             translate_text,
         )
 
+        logger.debug(f'Translating prompt to TTS language')
+
         initial = self._return(prompt_tpls, **kwargs)
+
         translation = None
+
         try:
             translation = await translate_text(
                 initial, self.tts_lang, call.lang.short_code
             )
+
         except HttpResponseError as e:
             self.logger.warning("Failed to translate TTS prompt: %s", e)
             pass
+
         return translation or initial
 
     @cached_property

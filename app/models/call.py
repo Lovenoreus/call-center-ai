@@ -79,8 +79,10 @@ class CallGetModel(BaseModel):
         for new_message in messages[1:]:
             # If the last message is not from the same persona or action, keep it as is
             last = merged[-1]
+
             if last.persona != new_message.persona or last.action != new_message.action:
                 merged.append(new_message)
+
                 continue
 
             # Merge the content and tool calls
@@ -93,6 +95,8 @@ class CallGetModel(BaseModel):
 
 
 class CallStateModel(CallGetModel, extra="ignore"):
+    logger.debug(f'Starting CallStateModel')
+
     # Immutable fields
     callback_secret: str = Field(
         default="".join(
@@ -108,6 +112,8 @@ class CallStateModel(CallGetModel, extra="ignore"):
 
     @property
     def lang(self) -> LanguageEntryModel:  # pyright: ignore
+        logger.debug(f'Setting the language. ShortCode: {short_code}')
+
         default = self.initiate.lang.default_lang
         if self.lang_short_code:
             return next(
@@ -118,6 +124,9 @@ class CallStateModel(CallGetModel, extra="ignore"):
                 ),
                 default,
             )
+
+        logger.debug(f'Language method returns: {default}')
+
         return default
 
     async def trainings(self, cache_only: bool = True) -> list[TrainingModel]:
@@ -129,8 +138,11 @@ class CallStateModel(CallGetModel, extra="ignore"):
         from app.helpers.config import CONFIG
         from app.helpers.monitoring import tracer
 
+        logger.debug(f'Getting last messages trainings')
+
         with tracer.start_as_current_span("call_trainings"):
             search = CONFIG.ai_search.instance
+
             tasks = await asyncio.gather(
                 *[
                     search.training_search_all(
@@ -138,11 +150,13 @@ class CallStateModel(CallGetModel, extra="ignore"):
                         lang=self.lang.short_code,
                         text=message.content,
                     )
+
                     for message in self.messages[
                         -CONFIG.ai_search.expansion_n_messages :
                     ]
                 ],
             )  # Get trainings from last messages
+
             trainings = sorted(
                 set(
                     training
@@ -151,6 +165,9 @@ class CallStateModel(CallGetModel, extra="ignore"):
                     if training.score >= CONFIG.ai_search.strictness
                 )
             )  # Flatten, remove duplicates, sort by score, filter by strictness
+
+            logger.debug(f'Returns training: {trainings}')
+
             return trainings
 
     def tz(self) -> tzinfo:
@@ -163,6 +180,8 @@ class CallStateModel(CallGetModel, extra="ignore"):
         """
         Get the last assistant message style.
         """
+        logger.debug(f'Setting the timezone of phone number.')
+
         inverted_messages = self.messages.copy()
         inverted_messages.reverse()
         for message in inverted_messages:
@@ -177,6 +196,8 @@ class CallStateModel(CallGetModel, extra="ignore"):
 
         An interaction is defined as a call with a human message.
         """
+        logger.debug(f'Checking for call interaction')
+
         return not (
             len(self.messages) >= 3  # noqa: PLR2004
             and self.messages[-3].action == MessageActionEnum.CALL

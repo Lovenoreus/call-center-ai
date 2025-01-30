@@ -67,6 +67,8 @@ async def load_llm_chat(  # noqa: PLR0913
     # Init language recognition
     audio_tts: asyncio.Queue[bytes] = asyncio.Queue()
 
+    logger.debug(f'Starting the load_llm_chat')
+
     async with (
         SttClient(
             call=call,
@@ -142,10 +144,15 @@ async def load_llm_chat(  # noqa: PLR0913
             """
             Process the response.
 
-            Start the chat task and wait for its response if needed. Job is stored in `last_response` shared variable.
+            Start the chat task and wait for its response if needed.
+            Job is stored in `last_response` shared variable.
             """
             # Start chat task
             nonlocal last_chat
+
+            logger.debug(f'Starting last chat task')
+            logger.debug(f'func call: _commit_answer-_continue_chat')
+
             last_chat = asyncio.create_task(
                 _continue_chat(
                     call=call,
@@ -161,6 +168,8 @@ async def load_llm_chat(  # noqa: PLR0913
             # Wait for its response
             if wait:
                 await last_chat
+
+                logger.debug(f'Got last chat: {last_chat}')
 
         async def _response_callback(_retry: bool = False) -> None:
             """
@@ -207,15 +216,25 @@ async def load_llm_chat(  # noqa: PLR0913
         # First call
         if len(call.messages) <= 1:
             # Welcome with a pre-recorded message
+            logger.debug(f'First time call')
+            logger.debug(f'func call: load_llm_chat-handle_realtime_tts')
+
             await handle_realtime_tts(
                 call=call,
                 tts_client=tts_client,
                 scheduler=scheduler,
                 text=await CONFIG.prompts.tts.hello(call),
             )
+
         # User is back
         else:
-            # Welcome with the LLM, do not use the end call tool for the first message, LLM hallucinates it and this is extremely frustrating for the user, don't wait for the response to start the VAD quickly
+            # Welcome with the LLM, do not use the end call tool for
+            # the first message, LLM hallucinates it and this is extremely
+            # frustrating for the user, don't wait for the response to start
+            # the VAD quickly
+            logger.debug(f'Returning User call')
+            logger.debug(f'func call: load_llm_chat-_commit_answer')
+
             await _commit_answer(
                 tool_blacklist={"end_call"},
                 wait=False,
@@ -251,6 +270,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
 
     Returns the updated call model.
     """
+
     # Add span attributes
     SpanAttributeEnum.CALL_CHANNEL.attribute("voice")
     SpanAttributeEnum.CALL_MESSAGE.attribute(call.messages[-1].content)
@@ -283,6 +303,8 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
         )
 
     # Chat
+    logger.debug(f'func call: _continue_chat-_generate_chat_completion')
+
     chat_task = asyncio.create_task(
         _generate_chat_completion(
             call=call,
@@ -333,6 +355,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                     chat_task.result()
                 )  # Store updated chat model
                 await training_callback(call)  # Trigger trainings generation
+
                 break
 
             # Break when hard timeout is reached
@@ -354,6 +377,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                         await answer_soft_timeout_sec(),
                     )
                     soft_timeout_triggered = True
+
                     # Never store the error message in the call history, it has caused hallucinations in the LLM
                     await handle_realtime_tts(
                         call=call,
@@ -394,6 +418,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
         # Retry chat after an error
         else:
             logger.info("Retrying chat, %s remaining", _iterations_remaining - 1)
+
             return await _continue_chat(
                 call=call,
                 client=client,
@@ -408,6 +433,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
     # Contiue chat
     elif continue_chat and _iterations_remaining > 0:
         logger.info("Continuing chat, %s remaining", _iterations_remaining - 1)
+
         return await _continue_chat(
             call=call,
             client=client,
@@ -452,6 +478,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     3. `CallStateModel`, the updated model
     """
     logger.debug("Running LLM chat")
+
     content_full = ""
 
     async def _plugin_tts_callback(text: str) -> None:
@@ -462,18 +489,21 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     async def _content_callback(buffer: str) -> None:
         # Remove tool calls from buffer content and detect style
         style, local_content = extract_message_style(buffer)
+
         await tts_callback(local_content, style)
 
     # Build RAG
     trainings = await call.trainings()
+
     logger.info("Enhancing LLM chat with %s trainings", len(trainings))
-    # logger.debug("Trainings: %s", trainings)
 
     # System prompts
     system = CONFIG.prompts.llm.chat_system(
         call=call,
         trainings=trainings,
     )
+
+    logger.debug(f'Using the system: {system}')
 
     # Build plugins
     plugins = DefaultPlugin(
@@ -485,25 +515,29 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
         tts_client=tts_client,
     )
 
+    logger.debug(f'Built plugin: {plugins}')
+
     tools = []
     if not use_tools:
         logger.warning("Tools disabled for this chat")
+
     else:
         tools = await plugins.to_openai(frozenset(tool_blacklist))
-        # logger.debug("Tools: %s", tools)
+        logger.debug("Tools: %s", tools)
 
     # Translate messages to avoid LLM hallucinations
     # See: https://github.com/microsoft/call-center-ai/issues/260
     translated_messages = await asyncio.gather(
         *[message.translate(call.lang.short_code) for message in call.messages]
     )
-    # logger.debug("Translated messages: %s", translated_messages)
+    logger.debug("Translated messages: %s", translated_messages)
 
     # Execute LLM inference
     content_buffer_pointer = 0
     last_buffered_tool_id = None
     maximum_tokens_reached = False
     tool_calls_buffer: dict[str, MessageToolModel] = {}
+
     try:
         # Consume the completion stream
         async for delta in completion_stream(
@@ -546,6 +580,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     # Last user message is trash, remove it
     except SafetyCheckError as e:
         logger.warning("Safety Check error: %s", e)
+
         # Remove last user message
         if last_message := next(
             (
@@ -557,6 +592,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
             None,
         ):
             call.messages.remove(last_message)
+
         return True, False, call  # Error, no retry
 
     # Flush the remaining buffer

@@ -34,6 +34,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError, ValidationException
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from htmlmin.minify import html_minify
 from jinja2 import Environment, FileSystemLoader
 from pydantic import Field, TypeAdapter, ValidationError
@@ -76,6 +77,14 @@ from app.models.readiness import ReadinessCheckModel, ReadinessEnum, ReadinessMo
 from app.persistence.azure_queue_storage import (
     Message as AzureQueueStorageMessage,
 )
+
+import os
+
+static_dir = os.path.join(os.path.dirname(__file__), 'resources', 'public_website', 'static')
+print(static_dir)
+
+if os.path.exists(static_dir):
+    print('exist')
 
 # First log
 logger.info(
@@ -126,12 +135,15 @@ _COMMUNICATIONSERVICES_CALLABACK_TPL = urljoin(
     str(CONFIG.public_domain),
     "/communicationservices/callback/{call_id}/{callback_secret}",
 )
+
 logger.info("Using callback URL %s", _COMMUNICATIONSERVICES_CALLABACK_TPL)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
     queue_tasks = None
+
+    logger.debug('Trigger events begin!')
 
     try:
         queue_tasks = asyncio.gather(
@@ -152,18 +164,27 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
                 func=training_event,
             ),
         )
+
+        logger.debug(f'Queue tasks: {queue_tasks}')
+
         yield
 
     # Cancel tasks
     finally:
+        logger.debug('Cancelling queue to remove all triggered events.')
+
         if queue_tasks:
             queue_tasks.cancel()
 
     # Close HTTP session
+    logger.debug('Closing HTTP Session')
+
     await (await aiohttp_session()).close()
 
 
 # FastAPI
+logger.debug('Creating the API')
+
 api = FastAPI(
     contact={
         "url": "https://github.com/microsoft/call-center-ai",
@@ -178,6 +199,7 @@ api = FastAPI(
     version=CONFIG.version,
 )
 
+api.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @api.get("/health/liveness")
 @tracer.start_as_current_span("health_liveness_get")
@@ -206,6 +228,8 @@ async def health_readiness_get() -> JSONResponse:
     Returns a 200 OK if the service is ready to serve requests. If the service is not ready, it should return a 503 Service Unavailable.
     """
     # Check all components in parallel
+    logger.debug('Initializing readiness checks')
+
     (
         cache_check,
         store_check,
@@ -229,11 +253,18 @@ async def health_readiness_get() -> JSONResponse:
     )
     # If one of the checks fails, the whole readiness fails
     status_code = HTTPStatus.OK
+
     for check in readiness.checks:
+        logger.debug(f'Running readiness check for: {check.id}')
+
         if check.status != ReadinessEnum.OK:
             readiness.status = ReadinessEnum.FAIL
             status_code = HTTPStatus.SERVICE_UNAVAILABLE
+
+            logger.debug(f'Readiness check FAILED for: {check.id}')
+
             break
+
     return JSONResponse(
         content=readiness.model_dump(mode="json"),
         status_code=status_code,
@@ -387,9 +418,14 @@ async def call_post(request: Request) -> CallGetModel:
 
     Returns a single call object `CallGetModel`, in JSON format.
     """
+    logger.debug(f'started func: call_post')
+
     try:
         body = await request.json()
         initiate = CallInitiateModel.model_validate(body)
+
+        logger.debug(f'CallInitiateModel: {initiate}')
+
     except ValidationError as e:
         raise RequestValidationError([str(e)]) from e
 
@@ -404,6 +440,9 @@ async def call_post(request: Request) -> CallGetModel:
 
     # Init SDK
     automation_client = await _use_automation_client()
+
+    logger.debug(f'Initialized the Azure SDK')
+
     streaming_options = MediaStreamingOptions(
         audio_channel_type=MediaStreamingAudioChannelType.UNMIXED,
         content_type=MediaStreamingContentType.AUDIO,
@@ -419,10 +458,14 @@ async def call_post(request: Request) -> CallGetModel:
         target_participant=PhoneNumberIdentifier(initiate.phone_number),  # pyright: ignore
     )
 
+    logger.debug(f'Call connection properties: {call_connection_properties}')
+
     logger.info(
         "Created call with connection id: %s",
         call_connection_properties.call_connection_id,
     )
+
+    logger.debug(f'call_post returns: {TypeAdapter(CallGetModel).dump_python(call)}')
 
     return TypeAdapter(CallGetModel).dump_python(call)
 
@@ -438,17 +481,27 @@ async def call_event(
 
     Queue message is a JSON object `EventGridEvent` with an event type of `AcsIncomingCallEventName`.
     """
+    logger.debug(f'Starting Call Event for call: {call}')
+
     # Parse event
     event = EventGridEvent.from_json(call.content)
+
     event_type = event.event_type
+
+    logger.debug(f'Event: {event}, Event Type: {event_type}')
+
     if not event_type == SystemEventNames.AcsIncomingCallEventName:
         logger.warning("Event %s not supported", event_type)
-        # logger.debug("Event data %s", event.data)
+
+        logger.debug("Event data %s", event.data)
+
         return
 
     # Parse phone number
     call_context: str = event.data["incomingCallContext"]
     phone_number = PhoneNumber(event.data["from"]["phoneNumber"]["value"])
+
+    logger.debug(f'Phone Number {phone_number} parsed with call content {call_context}')
 
     # Get URLs
     callback_url, wss_url, _call = await _communicationservices_urls(phone_number)
@@ -521,6 +574,9 @@ async def _communicationservices_validate_jwt(
 ) -> None:
     # Validate JWT token
     service_jwt: str | None = headers.get("Authorization")
+
+    logger.debug('Validating communicationservices jwt headers')
+
     if not service_jwt:
         raise HTTPException(
             detail="Authorization header missing",
@@ -552,6 +608,8 @@ async def _communicationservices_validate_call_id(
     call_id: UUID,
     secret: str,
 ) -> CallStateModel:
+    logger.debug(f'Call validation')
+
     # Enrich span
     SpanAttributeEnum.CALL_ID.attribute(str(call_id))
 
@@ -573,6 +631,8 @@ async def _communicationservices_validate_call_id(
     # Enrich span
     SpanAttributeEnum.CALL_PHONE_NUMBER.attribute(call.initiate.phone_number)
 
+    logger.debug(f'return call: {call}')
+
     return call
 
 
@@ -590,6 +650,7 @@ async def communicationservices_wss_post(
 
     # Accept connection
     await websocket.accept()
+
     logger.info("WebSocket connection established")
 
     # Client SDK
@@ -598,6 +659,9 @@ async def communicationservices_wss_post(
     # Queues
     audio_in: asyncio.Queue[bytes] = asyncio.Queue()
     audio_out: asyncio.Queue[bytes | bool] = asyncio.Queue()
+
+    logger.debug(f'Initial audio in queue: {audio_in}')
+    logger.debug(f'Initial audio out queue: {audio_out}')
 
     async def _consume_audio() -> None:
         """
@@ -608,17 +672,26 @@ async def communicationservices_wss_post(
         # Loop until the WebSocket is disconnected
         with suppress(WebSocketDisconnect):
             start: float | None = None
+
+            # An async for loop.
             async for event in websocket.iter_json():
+                logger.debug(f'Websocket consume audio event: {event}')
+
                 # TODO: Handle configuration event (audio format, sample rate, etc.)
                 # Skip non-audio events
                 if "kind" not in event or event["kind"] != "AudioData":
+                    logger.debug(f'Not good audio')
+
                     continue
 
                 # Filter out silent audio
                 audio_data: dict[str, Any] = event.get("audioData", {})
                 audio_base64: str | None = audio_data.get("data", None)
                 audio_silent: bool | None = audio_data.get("silent", True)
+
                 if audio_silent or not audio_base64:
+                    logger.debug(f'Silent audio')
+
                     continue
 
                 # Queue audio
@@ -630,6 +703,9 @@ async def communicationservices_wss_post(
                         metric=call_frames_in_latency,
                         value=time.monotonic() - start,
                     )
+
+                    logger.debug(f'Metric set')
+
                 start = time.monotonic()
 
         logger.debug("Audio data consumer stopped")
@@ -643,13 +719,20 @@ async def communicationservices_wss_post(
         # Loop until the WebSocket is disconnected
         with suppress(WebSocketDisconnect):
             start: float | None = None
+
             while True:
                 # Get audio
                 audio_data = await audio_out.get()
+
+                logger.debug(f'Audio send audio data: {b64encode(audio_data).decode("utf-8")}')
+
+                # Mark the audio out task as done.
                 audio_out.task_done()
 
                 # Send audio
                 if isinstance(audio_data, bytes):
+                    logger.debug(f'Send audio via socket!')
+
                     await websocket.send_json(
                         {
                             "kind": "AudioData",
@@ -662,6 +745,7 @@ async def communicationservices_wss_post(
                 # Stop audio
                 elif audio_data is False:
                     logger.debug("Stop audio event received, stopping audio")
+
                     await websocket.send_json(
                         {
                             "kind": "StopAudio",
@@ -675,9 +759,18 @@ async def communicationservices_wss_post(
                         metric=call_frames_out_latency,
                         value=time.monotonic() - start,
                     )
+
+                    logger.debug(f'metric set')
+
                 start = time.monotonic()
 
         logger.debug("Audio data sender stopped")
+
+
+    logger.debug('func call: communicationservices_wss_post-_consume_audio')
+    logger.debug('func call: communicationservices_wss_post-_send_audio')
+    logger.debug('func call: communicationservices_wss_post-_trigger_post_event')
+    logger.debug('func call: communicationservices_wss_post-on_audio_connected')
 
     async with get_scheduler() as scheduler:
         await asyncio.gather(
@@ -715,11 +808,16 @@ async def communicationservices_callback_post(
     Returns a 204 No Content if the events are properly formatted. A 401 Unauthorized if the JWT token is invalid. Otherwise, returns a 400 Bad Request.
     """
 
+    logger.debug('Communicationservices websocket start.')
+
     # Validate connection
     await _communicationservices_validate_jwt(request.headers)
 
     # Validate request
     events = await request.json()
+
+    logger.debug(f'Events {events}, Call Id {call_id}')
+
     if not events or not isinstance(events, list):
         raise RequestValidationError(["Events must be a list"])
 
@@ -758,6 +856,9 @@ async def _communicationservices_event_worker(
     Returns None. Can trigger additional events to `training` and `post` queues.
     """
 
+    logger.debug(f'Starting communication Event handling for: {event_dict} and Call ID: {call_id}')
+
+
     # Validate connection
     call = await _communicationservices_validate_call_id(call_id, secret)
 
@@ -766,6 +867,8 @@ async def _communicationservices_event_worker(
     assert isinstance(event.data, dict)
 
     async with get_scheduler() as scheduler:
+        logger.debug(f'Starting a scheduler for event: {event}')
+
         # Store connection ID
         connection_id = event.data["callConnectionId"]
         async with _db.call_transac(
@@ -786,6 +889,8 @@ async def _communicationservices_event_worker(
 
         # Log
         logger.debug("Call event received %s", event_type)
+
+        logger.debug('Matching event types.')
 
         match event_type:
             # Call answered
@@ -954,11 +1059,18 @@ async def _communicationservices_urls(
 
     Returnes a tuple of the callback URL, the WebSocket URL, and the call object.
     """
+    logger.debug(f'Checking for previous calls by phone number: {phone_number}')
+
     # Get call
     call = await _db.call_search_one(phone_number)
 
+    if call:
+        logger.debug(f'Found call: {call}')
+
     # Create new call if initiate is different
     if not call or (initiate and call.initiate != initiate):
+        logger.debug(f'Cannot use previous call, creating new one.')
+
         call = await _db.call_create(
             CallStateModel(
                 initiate=initiate
@@ -968,16 +1080,24 @@ async def _communicationservices_urls(
                 )
             )
         )
+        logger.debug(f'New Call: {call}')
+
+    logger.debug(f'Formatting the urls!')
 
     # Format URLs
     wss_url = _COMMUNICATIONSERVICES_WSS_TPL.format(
         callback_secret=call.callback_secret,
         call_id=str(call.call_id),
     )
+
+    logger.debug(f'wss_url: {wss_url}')
+
     callaback_url = _COMMUNICATIONSERVICES_CALLABACK_TPL.format(
         callback_secret=call.callback_secret,
         call_id=str(call.call_id),
     )
+
+    logger.debug(f'callaback_url: {callaback_url}')
 
     return callaback_url, wss_url, call
 

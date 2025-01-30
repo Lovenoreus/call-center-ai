@@ -50,6 +50,8 @@ class DefaultPlugin(AbstractPlugin):
         """
         from app.helpers.call_events import hangup_realtime_now
 
+        logger.debug(f'Plugin for end call')
+
         await hangup_realtime_now(
             call=self.call,
             client=self.client,
@@ -57,6 +59,7 @@ class DefaultPlugin(AbstractPlugin):
             scheduler=self.scheduler,
             tts_client=self.tts_client,
         )
+
         return "Call ended"
 
     @add_customer_response(
@@ -84,6 +87,8 @@ class DefaultPlugin(AbstractPlugin):
         - Talking about a totally different subject
         """
         # Launch post-call intelligence for the current call
+        logger.debug(f'Plugin for new claim')
+
         await self.post_callback(self.call)
 
         # Store the last message and use it at first message of the new claim
@@ -98,10 +103,13 @@ class DefaultPlugin(AbstractPlugin):
                         content="",
                         persona=MessagePersonaEnum.HUMAN,
                     ),
-                    # TODO: Should it be a reminder for the last conversation subject? It would allow to keep the context of the conversation. Keeping the last message in the history is felt as weird for users (see: https://github.com/microsoft/call-center-ai/issues/397).
+                    # TODO: Should it be a reminder for the last conversation subject?
+                    #  It would allow to keep the context of the conversation. Keeping the last message
+                    #  in the history is felt as weird for users (see: https://github.com/microsoft/call-center-ai/issues/397).
                 ],
             )
         )
+
         return "Claim, reminders and messages reset"
 
     @add_customer_response(
@@ -147,6 +155,8 @@ class DefaultPlugin(AbstractPlugin):
         - Call back for a follow-up
         - Wait for customer to send a document
         """
+        logger.debug(f'Creating or updating reminder')
+        
         # Check if reminder already exists, if so update it
         for reminder in self.call.reminders:
             if reminder.title == title:
@@ -155,6 +165,7 @@ class DefaultPlugin(AbstractPlugin):
                     reminder.due_date_time = due_date_time  # pyright: ignore
                     reminder.owner = owner
                     return f'Reminder "{title}" updated.'
+
                 except ValidationError as e:
                     return f'Failed to edit reminder "{title}": {e.json()}'
 
@@ -167,6 +178,7 @@ class DefaultPlugin(AbstractPlugin):
                 title=title,
             )
             self.call.reminders.append(reminder)
+
             return f'Reminder "{title}" created.'
         except ValidationError as e:
             return f'Failed to create reminder "{title}": {e.json()}'

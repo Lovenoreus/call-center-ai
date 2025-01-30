@@ -210,14 +210,20 @@ class CosmosDbStore(IStore):
         data = call.model_dump(mode="json", exclude_none=True)
         data["id"] = str(call.call_id)
 
+        logger.debug(f'Call data: {data} for call id: {data["id"]}')
+
         # Persist
         try:
             async with self._use_client() as db:
                 await db.create_item(body=data)
+
         except CosmosHttpResponseError:
             logger.exception("Error accessing CosmosDB")
+
         except ValidationError:
             logger.debug("Parsing error", exc_info=True)
+
+        loger.debug(f'Updating Cache for call with id {call.call_id}')
 
         # Update cache
         cache_key = self._cache_key_call_id(call.call_id)
@@ -229,11 +235,18 @@ class CosmosDbStore(IStore):
             value=call.model_dump_json(),
         )
 
+        logger.debug(f'Invalidating cache for phone number {call.initiate.phone_number}')
+
         # Invalidate phone number cache
         cache_key_phone_number = self._cache_key_phone_number(
             call.initiate.phone_number
         )
+
+        logger.debug(f'Deleting the cache: {cache_key_phone_number}')
+
         await self._cache.delete(cache_key_phone_number)
+
+        logger.debug(f'returning call: {call}')
 
         return call
 
