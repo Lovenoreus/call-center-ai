@@ -488,7 +488,7 @@ async def call_event(
 
     event_type = event.event_type
 
-    logger.debug(f'Event: {event}, Event Type: {event_type}')
+    logger.debug(f'Event Type: {event_type}')
 
     if not event_type == SystemEventNames.AcsIncomingCallEventName:
         logger.warning("Event %s not supported", event_type)
@@ -501,7 +501,7 @@ async def call_event(
     call_context: str = event.data["incomingCallContext"]
     phone_number = PhoneNumber(event.data["from"]["phoneNumber"]["value"])
 
-    logger.debug(f'Phone Number {phone_number} parsed with call content {call_context}')
+    logger.debug(f'Phone Number {phone_number}')
 
     # Get URLs
     callback_url, wss_url, _call = await _communicationservices_urls(phone_number)
@@ -615,6 +615,7 @@ async def _communicationservices_validate_call_id(
 
     # Validate call
     call = await _db.call_get(call_id)
+
     if not call:
         raise HTTPException(
             detail=f"Call {call_id} not found",

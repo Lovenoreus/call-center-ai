@@ -267,12 +267,17 @@ async def on_realtime_recognize_error(
     """
     Callback for when a real-time recognition fails.
 
-    If the call should continue, increments the recognition retry counter and plays a timeout prompt. Else, hangs up the call.
+    If the call should continue, increments the recognition retry counter and plays a timeout prompt.
+    Else, hangs up the call.
     """
+    logger.debug(f'func call: on_realtime_recognize_error-_pre_recognize_error')
+
     if not await _pre_recognize_error(
         call=call,
         scheduler=scheduler,
     ):
+        logger.debug(f'func call: on_realtime_recognize_error-hangup_realtime_now')
+
         await hangup_realtime_now(
             call=call,
             client=client,
@@ -281,6 +286,8 @@ async def on_realtime_recognize_error(
             tts_client=tts_client,
         )
         return
+
+    logger.debug(f'func call: on_realtime_recognize_error-handle_realtime_tts')
 
     # Play a timeout prompt
     await handle_realtime_tts(
@@ -302,6 +309,8 @@ async def hangup_realtime_now(
     """
     Hangup the call and play a goodbye.
     """
+    logger.debug(f'Hanging up the call and playing goodbye')
+
     # Play TTS
     await handle_realtime_tts(
         call=call,
@@ -310,8 +319,14 @@ async def hangup_realtime_now(
         text=await CONFIG.prompts.tts.goodbye(call),
         tts_client=tts_client,
     )
+
+    logger.debug(f'Ensure TTS is played')
+
     # TODO: Hack to avoid the call to close before TTS is played
     await asyncio.sleep(10)
+
+    logger.debug(f'Hang up now!')
+
     # Hangup
     await hangup_now(
         call=call,
@@ -334,7 +349,10 @@ async def _pre_recognize_error(
     """
     # Voice retries are exhausted, end call
     if call.recognition_retry >= await recognition_retry_max():
+        logger.debug("func call: _pre_recognize_error-recognition_retry_max")
+
         logger.info("Timeout, ending call")
+
         return False
 
     # Increment the recognition retry counter
@@ -343,6 +361,8 @@ async def _pre_recognize_error(
         scheduler=scheduler,
     ):
         call.recognition_retry += 1
+
+        logger.debug(f'recognition retry incremented to: {call.recognition_retry}')
 
     return True
 
@@ -587,6 +607,7 @@ async def hangup_now(
             scheduler=scheduler,
         ):
             call.in_progress = False
+
             call.messages.append(
                 MessageModel(
                     action=MessageActionEnum.HANGUP,
@@ -594,6 +615,10 @@ async def hangup_now(
                     persona=MessagePersonaEnum.HUMAN,
                 )
             )
+
+            logger.debug(f'Final message stored')
+
+    logger.debug(f'func call: hangup_now-handle_hangup')
 
     await asyncio.gather(
         handle_hangup(client=client, call=call),

@@ -73,8 +73,12 @@ async def completion_stream(
     """
     Returns a stream of completions.
 
-    Completion is first made with the fast LLM, then the slow LLM if the previous fails. Catch errors for a maximum of 3 times (internal + `RateLimitError`). If it fails again, raise the error.
+    Completion is first made with the fast LLM, then the slow LLM if the previous fails.
+    Catch errors for a maximum of 3 times (internal + `RateLimitError`). If it fails again, raise the error.
     """
+
+    logger.debug(f'LLM Async Retries')
+
     retryed = AsyncRetrying(
         reraise=True,
         retry=retry_any(
@@ -86,6 +90,8 @@ async def completion_stream(
 
     # Try first with primary LLM
     try:
+        logger.debug(f'completion_stream-_completion_stream_worker')
+
         async for attempt in retryed:
             with attempt:
                 async for chunck in _completion_stream_worker(
@@ -95,8 +101,12 @@ async def completion_stream(
                     system=system,
                     tools=tools,
                 ):
+                    logger.debug(f'Using primary LLM for chunk: {chunck}')
+
                     yield chunck
+
                 return
+
     except Exception as e:
         if not any(isinstance(e, exception) for exception in _retried_exceptions):
             raise e
@@ -104,6 +114,8 @@ async def completion_stream(
             "%s error, trying with the other LLM backend",
             e.__class__.__name__,
         )
+
+    logger.debug(f'completion_stream-_completion_stream_worker')
 
     # Then try more times with backup LLM
     async for attempt in retryed:
@@ -115,6 +127,8 @@ async def completion_stream(
                 system=system,
                 tools=tools,
             ):
+                logger.debug(f'Using backup LLM for chunk: {chunck}')
+
                 yield chunck
 
 
@@ -129,10 +143,18 @@ async def _completion_stream_worker(
     """
     Returns a stream of completions.
     """
+    logger.debug(f'Setting up LLM')
+
+    logger.debug(f'func call: _completion_stream_worker-_use_llm')
+
     # Init client
     client, platform = await _use_llm(is_fast)
 
-    # Build context and limit to 20 messages for quick response and avoid hallucinations
+    logger.debug(f'Building the prompt')
+
+    logger.debug(f'func call: _completion_stream_worker-_limit_messages')
+
+    # Build context and limit to 20 messages for quick response and avoid hallucinations.
     prompt = _limit_messages(
         context_window=platform.context,
         max_messages=20,  # Quick response
@@ -153,21 +175,31 @@ async def _completion_stream_worker(
         tools=tools or None,
     )
 
+    logger.debug(f'Completed stream: {stream}')
+
     # Yield chuncks
     async for chunck in stream:
         choices = chunck.choices
+
         # Skip empty choices, happens sometimes with GPT-4 Turbo
         if not choices:
             continue
+
         choice = choices[0]
         delta = choice.delta
+
         # Azure OpenAI content filter
         if choice.finish_reason == "content_filter":
             raise SafetyCheckError(f"Issue detected in text: {delta.content}")
+
         if choice.finish_reason == "length":
             logger.warning("Maximum tokens reached %s, should be fixed", max_tokens)
+
             raise MaximumTokensReachedError(f"Maximum tokens reached {max_tokens}")
+
         if delta:
+            logger.debug(f'Yield delta: {delta}')
+
             yield delta
 
 
@@ -306,8 +338,11 @@ def _limit_messages(  # noqa: PLR0913
     """
     Returns a list of messages limited by the context size.
 
-    The context size is the maximum number of tokens allowed by the model. The messages are selected from the newest to the oldest, until the context or the maximum number of messages is reached.
+    The context size is the maximum number of tokens allowed by the model.
+    The messages are selected from the newest to the oldest, until the context or the maximum number
+    of messages is reached.
     """
+
     max_tokens = max_tokens or 0  # Default
 
     counter = 0
@@ -341,6 +376,7 @@ def _limit_messages(  # noqa: PLR0913
         tokens += new_tokens
 
     logger.info("Using %s/%s messages (%s tokens) as context", counter, total, tokens)
+
     return [
         *system,
         *selected_messages[::-1],
@@ -379,6 +415,9 @@ async def _use_llm(
     """
     Returns an LLM client and platform model.
 
-    The client is either an Azure OpenAI or an OpenAI client, depending on the configuration.
+    The client is either an Azure OpenAI or an OpenAI client,
+    depending on the configuration.
     """
+    logger.debug(f'Getting LLM client')
+
     return await CONFIG.llm.selected(is_fast).client()

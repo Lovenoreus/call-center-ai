@@ -91,6 +91,9 @@ class AbstractPlugin:
         tool: ToolModel,
         blacklist: set[str],
     ) -> None:
+        logger.debug(f'Start tools execution')
+
+        logger.debug(f'func call: execute-_available_functions')
         functions = [
             func.__name__ for func in self._available_functions(frozenset(blacklist))
         ]
@@ -101,10 +104,13 @@ class AbstractPlugin:
         if name not in functions:
             res = f"Invalid function names {name}, available are {functions}."
             logger.warning(res)
+
             # Update tool
             tool.content = res
+
             # Enrich span
             SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
+
             return
 
         # Try to fix JSON args to catch LLM hallucinations
@@ -122,12 +128,15 @@ class AbstractPlugin:
                 json_str[:20],
                 json_str[-20:],
             )
+
             # Update tool
             tool.content = (
                 f"Bad arguments, available are {functions}. Please try again."
             )
+
             # Enrich span
             SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
+
             return
 
         # Enrich span
@@ -137,7 +146,9 @@ class AbstractPlugin:
         # Execute the function
         try:
             res = await getattr(self, name)(**args)
+
             res_log = f"{res[:20]}...{res[-20:]}"
+
             logger.info("Executed function %s (%s): %s", name, args, res_log)
 
         # Catch wrong arguments
@@ -153,11 +164,15 @@ class AbstractPlugin:
                 tool.function_name,
                 args,
             )
+
             res = f"Error: {e}."
             res_log = res
 
         # Update tool
         tool.content = res
+
+        logger.debug(f'Logging tool content: {tool.content}')
+
         # Enrich span
         SpanAttributeEnum.TOOL_RESULT.attribute(tool.content)
 

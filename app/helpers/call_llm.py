@@ -94,6 +94,7 @@ async def load_llm_chat(  # noqa: PLR0913
             """
             Triggered when the phone silence timeout is reached.
             """
+
             from app.helpers.call_events import on_realtime_recognize_error
 
             logger.info("Phone silence timeout triggered")
@@ -113,6 +114,8 @@ async def load_llm_chat(  # noqa: PLR0913
             """
             Triggered when the audio buffer needs to be cleared.
             """
+            logger.debug(f'Clearing the audio out buffer')
+
             # Report the cutoff latency
             start = time.monotonic()
 
@@ -169,18 +172,23 @@ async def load_llm_chat(  # noqa: PLR0913
             if wait:
                 await last_chat
 
-                logger.debug(f'Got last chat: {last_chat}')
+                logger.debug(f'Completed last chat')
 
         async def _response_callback(_retry: bool = False) -> None:
             """
             Triggered when the audio buffer needs to be processed.
 
-            If the recognition is empty, retry the recognition once. Otherwise, process the response.
+            If the recognition is empty, retry the recognition once. Otherwise,
+            process the response.
             """
+            logger.debug(f'Processing the audio buffer')
+
             # Report the answer latency
             aec.answer_start()
 
             # Pull the recognition
+            logger.debug(f'func call: _response_callback-pull_recognition')
+
             stt_text = await stt_client.pull_recognition()
 
             # Ignore empty recognition
@@ -188,8 +196,10 @@ async def load_llm_chat(  # noqa: PLR0913
                 # Skip if already retries
                 if _retry:
                     return
+
                 # Retry recognition, maybe the user was too fast or the recognition is temporarly slow
                 await asyncio.sleep(0.2)
+
                 return await _response_callback(_retry=True)
 
             # Stop any previous response, but keep the metrics
@@ -197,6 +207,7 @@ async def load_llm_chat(  # noqa: PLR0913
 
             # Add it to the call history and update last interaction
             logger.info("Voice stored: %s", stt_text)
+
             async with _db.call_transac(
                 call=call,
                 scheduler=scheduler,
@@ -209,6 +220,8 @@ async def load_llm_chat(  # noqa: PLR0913
                         persona=MessagePersonaEnum.HUMAN,
                     )
                 )
+
+                logger.debug(f'Message appended to call.')
 
             # Process the response and wait for it to be able to kill the task if needed
             await _commit_answer(wait=True)
@@ -240,6 +253,8 @@ async def load_llm_chat(  # noqa: PLR0913
                 wait=False,
             )
 
+        logger.debug(f'func call: load_llm_chat-_process_audio_for_vad')
+
         # Detect VAD
         await _process_audio_for_vad(
             call=call,
@@ -266,7 +281,9 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
     """
     Handle the intelligence of the call, including: LLM chat, TTS, and media play.
 
-    Play the loading sound while waiting for the intelligence to be processed. If the intelligence is not processed after few secs, play the timeout sound. If the intelligence is not processed after more secs, stop the intelligence processing and play the error sound.
+    Play the loading sound while waiting for the intelligence to be processed. If the
+    intelligence is not processed after few secs, play the timeout sound. If the intelligence
+    is not processed after more secs, stop the intelligence processing and play the error sound.
 
     Returns the updated call model.
     """
@@ -290,9 +307,11 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
         Send back the TTS to the user.
         """
         nonlocal play_loading_sound
+
         # For first TTS, interrupt loading sound and disable loading it
         if play_loading_sound:
             play_loading_sound = False
+
         # Play the TTS
         await handle_realtime_tts(
             call=call,
@@ -304,6 +323,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
 
     # Chat
     logger.debug(f'func call: _continue_chat-_generate_chat_completion')
+    logger.debug(f'func call: _continue_chat-_tts_callback')
 
     chat_task = asyncio.create_task(
         _generate_chat_completion(
@@ -327,9 +347,15 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
 
     # Timeouts
     soft_timeout_triggered = False
+
+    logger.debug(f'Wait for soft time out.')
+
     soft_timeout_task = asyncio.create_task(
         asyncio.sleep(await answer_soft_timeout_sec())
     )
+
+    logger.debug(f'Wait for hard time out.')
+
     hard_timeout_task = asyncio.create_task(
         asyncio.sleep(await answer_hard_timeout_sec())
     )
@@ -340,8 +366,11 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
         loading_task.cancel()
         soft_timeout_task.cancel()
 
+        logger.debug(f'Canceling chat_task, hard_timeout_task, loading_task, soft_timeout_task')
+
     is_error = True
     continue_chat = True
+
     try:
         while True:
             # logger.debug("Chat task status: %s", chat_task.done())
@@ -350,11 +379,15 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
             if chat_task.done():
                 # Clean up
                 _clear_tasks()
+
                 # Get result
                 is_error, continue_chat, call = (
                     chat_task.result()
                 )  # Store updated chat model
+
                 await training_callback(call)  # Trigger trainings generation
+
+                logger.debug(f'Chat task is done!')
 
                 break
 
@@ -364,8 +397,10 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                     "Hard timeout of %ss reached",
                     await answer_hard_timeout_sec(),
                 )
+
                 # Clean up
                 _clear_tasks()
+
                 break
 
             # Catch timeout if async loading is not started
@@ -376,9 +411,10 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                         "Soft timeout of %ss reached",
                         await answer_soft_timeout_sec(),
                     )
+
                     soft_timeout_triggered = True
 
-                    # Never store the error message in the call history, it has caused hallucinations in the LLM
+                    # Never store the error message in the call history, it has caused hallucinations in the LLM.
                     await handle_realtime_tts(
                         call=call,
                         scheduler=scheduler,
@@ -390,6 +426,7 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                 # Do not play timeout prompt plus loading, it can be frustrating for the user
                 elif loading_task.done():
                     loading_task = _loading_task()
+
                     await scheduler.spawn(
                         handle_media(
                             call=call,
@@ -410,9 +447,12 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
         # Maximum retries reached
         if not continue_chat or _iterations_remaining < 1:
             logger.warning("Maximum retries reached, stopping chat")
+
             content = await CONFIG.prompts.tts.error(call)
+
             # Speak the error
             await _tts_callback(content, MessageStyleEnum.NONE)
+
             # Never store the error message in the call history, it has caused hallucinations in the LLM
 
         # Retry chat after an error
@@ -477,7 +517,8 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     2. `bool`, should retry chat
     3. `CallStateModel`, the updated model
     """
-    logger.debug("Running LLM chat")
+
+    logger.debug("Performing Chat with LLM")
 
     content_full = ""
 
@@ -487,8 +528,12 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
         await tts_callback(text, MessageStyleEnum.NONE)
 
     async def _content_callback(buffer: str) -> None:
+        logger.debug(f'func call: _content_callback-extract_message_style')
+
         # Remove tool calls from buffer content and detect style
         style, local_content = extract_message_style(buffer)
+
+        logger.debug(f'func call: _content_callback-tts_callback')
 
         await tts_callback(local_content, style)
 
@@ -530,6 +575,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     translated_messages = await asyncio.gather(
         *[message.translate(call.lang.short_code) for message in call.messages]
     )
+
     logger.debug("Translated messages: %s", translated_messages)
 
     # Execute LLM inference
@@ -539,6 +585,10 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     tool_calls_buffer: dict[str, MessageToolModel] = {}
 
     try:
+        logger.debug(f'LLM Handling the message')
+
+        logger.debug(f'func call: _generate_chat_completion-completion_stream')
+
         # Consume the completion stream
         async for delta in completion_stream(
             max_tokens=160,  # Lowest possible value for 90% of the cases, if not sufficient, retry will be triggered, 100 tokens ~= 75 words, 20 words ~= 1 sentence, 6 sentences ~= 160 tokens
@@ -546,37 +596,53 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
             system=system,
             tools=tools,
         ):
+            logger.debug(f'Completed stream delta: {delta}')
+
             # Complete tools
             if delta.tool_calls:
                 for piece in delta.tool_calls:
                     # Azure AI Inference sometimes returns empty tool IDs, in that case, use the last one
                     if piece.id:
                         last_buffered_tool_id = piece.id
+
                     # No tool ID, alert and skip
                     if not last_buffered_tool_id:
                         logger.warning(
                             "Empty tool ID, cannot buffer tool call: %s", piece
                         )
                         continue
+
                     # New, init buffer
                     if last_buffered_tool_id not in tool_calls_buffer:
                         tool_calls_buffer[last_buffered_tool_id] = MessageToolModel()
+
                     # Append
                     tool_calls_buffer[last_buffered_tool_id].add_delta(piece)
+
+                logger.debug(f'Tool calls buffer: {tool_calls_buffer}')
 
             # Complete content
             if delta.content:
                 content_full += delta.content
+
+                logger.debug(f'Content Full: {content_full}')
+
+                logger.debug(f'func call: _generate_chat_completion-tts_sentence_split')
+
                 for sentence, length in tts_sentence_split(
                     content_full[content_buffer_pointer:], False
                 ):
                     content_buffer_pointer += length
+
+                    logger.debug(f'func call: _generate_chat_completion-_content_callback')
+
                     await _content_callback(sentence)
 
     # Retry on maximum tokens reached
     except MaximumTokensReachedError:
         logger.warning("Maximum tokens reached for this completion, retry asked")
         maximum_tokens_reached = True
+
     # Last user message is trash, remove it
     except SafetyCheckError as e:
         logger.warning("Safety Check error: %s", e)
@@ -597,6 +663,10 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
 
     # Flush the remaining buffer
     if content_buffer_pointer < len(content_full):
+        logger.debug(f'Completing the rest.')
+
+        logger.debug(f'Remaining in buffer: {content_full[content_buffer_pointer:]}')
+
         await _content_callback(content_full[content_buffer_pointer:])
 
     # Convert tool calls buffer
@@ -615,11 +685,13 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
         tool_call.function_name == "multi_tool_use.parallel" for tool_call in tool_calls
     ):
         logger.warning('LLM send back invalid tool schema "multi_tool_use.parallel"')
+
         return True, True, call  # Error, retry
 
     # OpenAI GPT-4 Turbo tends to return empty content, in that case, retry within limits
     if not content_full and not tool_calls:
         logger.warning("Empty content, retrying")
+
         return True, True, call  # Error, retry
 
     # Execute tools
@@ -636,6 +708,8 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
                 for tool_call in tool_calls
             ]
         )
+
+        logger.debug(f'Executed the functions: {tool_calls}')
 
     # Update call model if object reference changed
     call = plugins.call
@@ -654,12 +728,16 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
             )
         )
 
-    # Recusive call if needed
+        logger.debug(f'Message stored')
+
+    # Recursive call if needed
     if tool_calls:
-        return False, True, call
+        return False, True, call  # no error, yes retry, call task
+
     # Retry if maximum tokens reached
     if maximum_tokens_reached:
         return False, True, call  # TODO: Should we notify an error?
+
     # No error, no retry
     return False, False, call
 
@@ -682,6 +760,8 @@ async def _process_audio_for_vad(  # noqa: PLR0913
     - Wait for silence and trigger the chat
     - Wait for longer silence and trigger the timeout
     """
+    logger.debug(f'Activating voice activity and silence detection')
+
     stop_task: asyncio.Task | None = None
     silence_task: asyncio.Task | None = None
 
@@ -691,25 +771,33 @@ async def _process_audio_for_vad(  # noqa: PLR0913
 
         If the silence is too long, run the timeout.
         """
+        logger.debug(f'Waiting for silence!')
+
         # Wait before flushing
         nonlocal stop_task
+
         timeout_ms = await vad_silence_timeout_ms()
+
         await asyncio.sleep(timeout_ms / 1000)
 
         # Cancel the clear TTS task
         if stop_task:
             stop_task.cancel()
+
             stop_task = None
 
         # Flush the audio buffer
         logger.debug("Flushing audio buffer after %i ms", timeout_ms)
+
         await response_callback()
 
         # Wait for silence and trigger timeout
         timeout_sec = await phone_silence_timeout_sec()
+
         while True:
             # Stop this time if the call played a message
             timeout_start = datetime.now(UTC)
+
             await asyncio.sleep(timeout_sec)
 
             # Stop if the call ended
@@ -725,10 +813,12 @@ async def _process_audio_for_vad(  # noqa: PLR0913
                 logger.debug(
                     "Message sent in the meantime, canceling this silence timeout"
                 )
+
                 continue
 
             # Trigger the timeout
             logger.info("Silence triggered after %i sec", timeout_sec)
+
             await timeout_callback()
 
     async def _wait_for_stop() -> None:
@@ -741,7 +831,8 @@ async def _process_audio_for_vad(  # noqa: PLR0913
         await asyncio.sleep(timeout_ms / 1000)
 
         # Clear the queue
-        logger.info("Stoping TTS after %i ms", timeout_ms)
+        logger.info("Stopping TTS after %i ms", timeout_ms)
+
         await stop_callback()
 
     while True:
@@ -756,6 +847,7 @@ async def _process_audio_for_vad(  # noqa: PLR0913
             # Start timeout if not already started
             if not silence_task:
                 silence_task = asyncio.create_task(_wait_for_silence())
+
             # Continue to the next audio packet
             continue
 

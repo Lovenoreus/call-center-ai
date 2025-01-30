@@ -119,7 +119,8 @@ def tts_sentence_split(
     """
     Split a text into sentences.
 
-    Whitespaces are not returned, but punctiation is kept as it was in the original text.
+    Whitespaces are not returned, but punctiation is kept as it was in the
+    original text.
 
     Example:
     - Input: "Hello, world! How are you? I'm fine. Thank you... Goodbye!"
@@ -467,6 +468,7 @@ async def handle_hangup(
     If the call is already hung up, the exception will be suppressed.
     """
     logger.info("Hanging up")
+
     with (
         # Suppress hangup exception
         suppress(CallHangupException),
@@ -474,7 +476,9 @@ async def handle_hangup(
         _detect_hangup(),
     ):
         assert call.voice_id, "Voice ID is required to control the call"
+
         call_client = await _use_call_client(client, call.voice_id)
+
         await call_client.hang_up(is_for_everyone=True)
 
 
@@ -569,6 +573,13 @@ def _detect_hangup() -> Generator[None, None, None]:
     instead of the Call Automation SDK exceptions.
     """
     try:
+        logger.debug('Call hangup detected.')
+        logger.debug('This could be where our call does not hang up')
+        # Probably does not raise the correct exception.
+        # The exception being suppressed is the CallHangupException.
+        # We need to understand what we can do, to guarantee us
+        # getting this exception.
+        #
         yield
 
     except ResourceNotFoundError:
@@ -581,6 +592,13 @@ def _detect_hangup() -> Generator[None, None, None]:
             logger.debug("Call hung up")
 
             raise CallHangupException
+
+        # Added by Godlove.
+        # elif "Timeout connecting to server" in e.message.lower():
+        #     logger.debug(f"Call hung up")
+        #     logger.debug(f"CallHangupException raised")
+        #
+        #     raise CallHangupException
 
         else:
             raise e
@@ -730,8 +748,13 @@ class SttClient:
         """
         # Skip empty results
         text = event.result.text
+
+        logger.debug(f'Partial recognition coming in text is: {text}')
+
         if not text:
             return
+
+        logger.debug(f'Partial recognition coming in buffer: {self._stt_buffer}')
 
         # Initialize buffer if empty
         if not self._stt_buffer:
@@ -748,8 +771,13 @@ class SttClient:
         """
         # Skip empty results
         text = event.result.text
+
+        logger.debug(f'Complete recognition coming in text is: {text}')
+
         if not text:
             return
+
+        logger.debug(f'Complete recognition coming in buffer: {self._stt_buffer}')
 
         # Initialize buffer if empty
         if not self._stt_buffer:
@@ -757,6 +785,7 @@ class SttClient:
 
         # Store the result
         self._stt_buffer[-1] = text
+
         logger.debug("Complete recognition: %s", self._stt_buffer)
 
         # Prepare for the next recognition
@@ -764,6 +793,8 @@ class SttClient:
 
         # Signal the completion
         self._stt_complete_gate.set()
+
+        logger.debug(f'Completion signal sent')
 
     async def _clear_buffer_when_completed(self) -> None:
         """
@@ -804,15 +835,19 @@ class SttClient:
         """
         Pull the recognition result and reset the buffer.
         """
+        logger.debug(f'Pulling recognition')
+
         # Report the complete latency
         await self._scheduler.spawn(self._report_complete_latency())
 
         # Wait the complete recognition for 50ms maximum
         try:
+            logger.debug(f'Waiting for complete recognition done')
             await asyncio.wait_for(
                 self._stt_complete_gate.wait(),
                 timeout=await recognition_stt_complete_timeout_ms() / 1000,
             )
+
         except TimeoutError:
             logger.debug("Complete recognition timeout, using partial recognition")
 
@@ -821,6 +856,10 @@ class SttClient:
 
         # Clear the buffer when completed
         await self._scheduler.spawn(self._clear_buffer_when_completed())
+
+        logger.debug(f'Pull recognition returns the text: {text}')
+
+        logger.debug(f'Buffer content: {self._stt_buffer}')
 
         # Return the text
         return text
@@ -1041,7 +1080,8 @@ class AECStream:
         """
         Pull processed PCM audio and metadata from the output queue.
 
-        Returns a tuple with the echo-cancelled PCM audio and a boolean flag indicating if the user was speaking.
+        Returns a tuple with the echo-cancelled PCM audio and a boolean
+        flag indicating if the user was speaking.
         """
         # Fetch output audio
         try:

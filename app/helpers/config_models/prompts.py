@@ -559,6 +559,8 @@ class TtsModel(BaseModel):
         return await self._translate(self.timeout_silence_tpl, call)
 
     async def timeout_loading(self, call: CallStateModel) -> str:
+        self.logger.debug(f'timeout loading prompt template')
+
         return await self._translate(self.timeout_loading_tpl, call)
 
     async def ivr_language(self, call: CallStateModel) -> str:

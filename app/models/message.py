@@ -304,8 +304,10 @@ def extract_message_style(text: str) -> tuple[StyleEnum, str]:
     # Extract style
     default_style = StyleEnum.NONE
     res = re.match(_MESSAGE_STYLE_R, text)
+
     if not res:
         return default_style, text
+
     try:
         return (
             StyleEnum(res.group(1)),  # style

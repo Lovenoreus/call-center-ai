@@ -16,6 +16,7 @@ class DeploymentModel(BaseModel, frozen=True):
 
     @lru_acache()
     async def client(self) -> tuple[ChatCompletionsClient, "DeploymentModel"]:
+
         return ChatCompletionsClient(
             # Reliability
             seed=self.seed,
