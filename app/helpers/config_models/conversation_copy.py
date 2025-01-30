@@ -90,6 +90,11 @@ class WorkflowInitiateModel(BaseModel):
             type=ClaimTypeEnum.TEXT,
         ),
         ClaimFieldModel(
+            description="Description of the device information",
+            name="device_information",
+            type=ClaimTypeEnum.TEXT,
+        ),
+        ClaimFieldModel(
             description="Location of the incident",
             name="incident_location",
             type=ClaimTypeEnum.TEXT,
@@ -105,23 +110,13 @@ class WorkflowInitiateModel(BaseModel):
             type=ClaimTypeEnum.TEXT,
         ),
         ClaimFieldModel(
-            description="Medical records related to the incident",
-            name="medical_records",
+            description="Special Request related to the incident",
+            name="special_request",
             type=ClaimTypeEnum.TEXT,
         ),
         ClaimFieldModel(
-            description="Policy number of the customer",
-            name="policy_number",
-            type=ClaimTypeEnum.TEXT,
-        ),
-        ClaimFieldModel(
-            description="Pre-existing damages",
-            name="pre_existing_damages",
-            type=ClaimTypeEnum.TEXT,
-        ),
-        ClaimFieldModel(
-            description="Witnesses of the incident",
-            name="witnesses",
+            description="Priority level of the incident",
+            name="priority_level",
             type=ClaimTypeEnum.TEXT,
         ),
     ]  # Configured like in v4 for compatibility
@@ -131,7 +126,8 @@ class WorkflowInitiateModel(BaseModel):
         ge=0.75,
         le=1.25,
     )
-    task: str = "Helping the customer to file an insurance claim. The customer is probably calling because they have a problem with something covered by their policy, but it's not certain. The assistant needs information from the customer to complete the claim. The conversation is over when all the data relevant to the case has been collected. Filling in as much information as possible is important for further processing."
+    task: str = "Provide IT-support to customers which work in healthcare. Assistant requires data from the customer calling to provide tech-support. The assistant's role is not over until the issue is resolved or the request is fulfilled."
+
 
     def claim_model(self) -> type[BaseModel]:
         return _fields_to_pydantic(

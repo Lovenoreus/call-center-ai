@@ -83,6 +83,10 @@ class CallGetModel(BaseModel):
                 merged.append(new_message)
                 continue
 
+            # Check for duplicate user content and skip if content is identical
+            if new_message.persona == "human" and last.content == new_message.content:
+                continue  # Skip appending or merging
+
             # Merge the content and tool calls
             last.content = (last.content + " " + new_message.content).strip()
             last.tool_calls = list({*last.tool_calls, *new_message.tool_calls})

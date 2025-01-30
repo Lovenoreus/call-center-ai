@@ -20,6 +20,7 @@ from azure.communication.callautomation import (
 )
 from azure.communication.callautomation.aio import CallAutomationClient
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
+from opentelemetry.instrumentation.openai.shared import model_as_dict
 from pydantic import ValidationError
 
 from app.helpers.call_llm import load_llm_chat
@@ -702,6 +703,15 @@ async def _intelligence_synthesis(
     ):
         call.synthesis = model
 
+    # Save the model to a JSON file
+    import json, datetime
+    file_name = f"synthesis_model_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    try:
+        with open(file_name, "w") as f:
+            json.dump(model.dict(), f, indent=4)
+        logger.info(f"Model content saved to {file_name}")
+    except Exception as e:
+        logger.error(f"Failed to save synthesis to JSON: {e}")
 
 async def _intelligence_next(
     call: CallStateModel,

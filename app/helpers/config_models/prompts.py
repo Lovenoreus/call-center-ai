@@ -120,9 +120,7 @@ class LlmModel(BaseModel):
         Assistant: I'm specialized in insurance contracts. We can discuss that together. How can I help you today?
         User: action=talk The roof has had holes since yesterday's big storm. They're about the size of golf balls. I'm worried about water damage.
         Tools: update incident description, get trainings for contract details and claim history, create a reminder for assistant to plan an appointment with a roofer
-        Assistant: style=sad I know what you mean... I see, your roof has holes since the big storm yesterday. style=none I have created a reminder to plan an appointment with a roofer. style=cheerful I hope you are safe and sound! Take care of yourself... style=none Can you confirm me the address of the house plus the date of the storm
-
-
+        Assistant: style=sad I know what you mean... I see, your roof has holes since the big storm yesterday. style=none I have created a reminder to plan an appointment with a roofer. style=cheerful I hope you are safe and sound! Take care of yourself... style=none Can you confirm me the address of the house plus the date of the storm?
 
         ## Example 3
         Conversation objective: Assistant is a personal assistant.

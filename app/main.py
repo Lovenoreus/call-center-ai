@@ -191,7 +191,6 @@ async def health_liveness_get() -> None:
     """
     return
 
-
 @api.get(
     "/health/readiness",
     status_code=HTTPStatus.OK,

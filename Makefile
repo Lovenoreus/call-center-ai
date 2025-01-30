@@ -2,7 +2,7 @@
 version_full ?= $(shell $(MAKE) --silent version-full)
 version_small ?= $(shell $(MAKE) --silent version)
 # Dev tunnels configuration
-tunnel_name := call-center-ai-$(shell hostname | sed 's/[^a-zA-Z0-9]//g' | tr '[:upper:]' '[:lower:]')
+tunnel_name := call-center-ai1-$(shell hostname | sed 's/[^a-zA-Z0-9]//g' | tr '[:upper:]' '[:lower:]')
 tunnel_url ?= $(shell res=$$(devtunnel show $(tunnel_name) | grep -o 'http[s]*://[^ ]*' | xargs) && echo $${res%/})
 # Container configuration
 container_name := ghcr.io/clemlesne/call-center-ai
