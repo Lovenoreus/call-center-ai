@@ -29,7 +29,9 @@ class CommunicationServicesSms(ISms):
 
     async def send(self, content: str, phone_number: PhoneNumber) -> bool:
         logger.info("Sending SMS to %s", phone_number)
+
         success = False
+
         logger.info("SMS content: %s", content)
         try:
             async with await self._use_client() as client:

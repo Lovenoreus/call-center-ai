@@ -732,7 +732,7 @@ async def communicationservices_wss_post(
 
                 # Send audio
                 if isinstance(audio_data, bytes):
-                    logger.debug(f'Send audio via socket!')
+                    # logger.debug(f'Send audio via socket!')
 
                     await websocket.send_json(
                         {
@@ -761,7 +761,7 @@ async def communicationservices_wss_post(
                         value=time.monotonic() - start,
                     )
 
-                    logger.debug(f'metric set')
+                    # logger.debug(f'metric set')
 
                 start = time.monotonic()
 
@@ -1050,6 +1050,7 @@ async def post_event(
 
         # Execute business logic
         logger.debug("Post event received")
+
         await on_end_call(
             call=call,
             scheduler=scheduler,

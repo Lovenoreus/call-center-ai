@@ -156,7 +156,7 @@ class DefaultPlugin(AbstractPlugin):
         - Wait for customer to send a document
         """
         logger.debug(f'Creating or updating reminder')
-        
+
         # Check if reminder already exists, if so update it
         for reminder in self.call.reminders:
             if reminder.title == title:
@@ -430,6 +430,7 @@ class DefaultPlugin(AbstractPlugin):
             content=message,
             phone_number=self.call.initiate.phone_number,
         )
+
         if not success:
             return "Failed to send SMS"
 

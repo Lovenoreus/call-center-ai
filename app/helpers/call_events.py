@@ -779,6 +779,7 @@ async def _intelligence_next(
         return
 
     logger.info("Next action: %s", model)
+
     async with _db.call_transac(
         call=call,
         scheduler=scheduler,
