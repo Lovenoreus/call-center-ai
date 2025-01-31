@@ -223,7 +223,7 @@ class CosmosDbStore(IStore):
         except ValidationError:
             logger.debug("Parsing error", exc_info=True)
 
-        loger.debug(f'Updating Cache for call with id {call.call_id}')
+        logger.debug(f'Updating Cache for call with id {call.call_id}')
 
         # Update cache
         cache_key = self._cache_key_call_id(call.call_id)
