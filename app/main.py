@@ -805,7 +805,8 @@ async def communicationservices_callback_post(
 
     No parameters are expected. The body is a list of JSON objects `CloudEvent`.
 
-    Returns a 204 No Content if the events are properly formatted. A 401 Unauthorized if the JWT token is invalid. Otherwise, returns a 400 Bad Request.
+    Returns a 204 No Content if the events are properly formatted. A 401 Unauthorized if
+    the JWT token is invalid. Otherwise, returns a 400 Bad Request.
     """
 
     logger.debug('Communicationservices websocket start.')
@@ -895,6 +896,8 @@ async def _communicationservices_event_worker(
         match event_type:
             # Call answered
             case "Microsoft.Communication.CallConnected":
+                logger.debug(f'Running on_call_connected')
+
                 server_call_id = event.data["serverCallId"]
                 await on_call_connected(
                     call=call,
@@ -905,6 +908,8 @@ async def _communicationservices_event_worker(
 
             # Call hung up
             case "Microsoft.Communication.CallDisconnected":
+                logger.debug(f'Running on_call_disconnected')
+
                 await on_call_disconnected(
                     call=call,
                     client=automation_client,
@@ -914,10 +919,14 @@ async def _communicationservices_event_worker(
 
             # Speech/IVR recognized
             case "Microsoft.Communication.RecognizeCompleted":
+                logger.debug(f'Running on_ivr_recognized')
+
                 recognition_result: str = event.data["recognitionType"]
+
                 # Handle IVR
                 if recognition_result == "choices":
                     label_detected: str = event.data["choiceResult"]["label"]
+
                     await on_ivr_recognized(
                         call=call,
                         client=automation_client,
@@ -927,14 +936,18 @@ async def _communicationservices_event_worker(
 
             # Speech/IVR failed
             case "Microsoft.Communication.RecognizeFailed":
+                logger.debug(f'Running on_automation_recognize_error')
+
                 result_information = event.data["resultInformation"]
                 error_code: int = result_information["subCode"]
                 error_message: str = result_information["message"]
+
                 logger.debug(
                     "Speech recognition failed with error code %s: %s",
                     error_code,
                     error_message,
                 )
+
                 await on_automation_recognize_error(
                     call=call,
                     client=automation_client,
@@ -945,6 +958,8 @@ async def _communicationservices_event_worker(
 
             # Media started
             case "Microsoft.Communication.PlayStarted":
+                logger.debug(f'Running on_play_started')
+
                 await on_play_started(
                     call=call,
                     scheduler=scheduler,
@@ -952,6 +967,8 @@ async def _communicationservices_event_worker(
 
             # Media played
             case "Microsoft.Communication.PlayCompleted":
+                logger.debug(f'Running on_automation_play_completed')
+
                 await on_automation_play_completed(
                     call=call,
                     client=automation_client,
@@ -962,12 +979,16 @@ async def _communicationservices_event_worker(
 
             # Media play failed
             case "Microsoft.Communication.PlayFailed":
+                logger.debug(f'Running on_play_error')
+
                 result_information = event.data["resultInformation"]
                 error_code: int = result_information["subCode"]
                 await on_play_error(error_code)
 
             # Call transfer failed
             case "Microsoft.Communication.CallTransferFailed":
+                logger.debug(f'Running on_transfer_error')
+
                 result_information = event.data["resultInformation"]
                 sub_code: int = result_information["subCode"]
                 await on_transfer_error(

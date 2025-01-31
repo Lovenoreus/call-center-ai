@@ -524,7 +524,9 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
 
     async def _plugin_tts_callback(text: str) -> None:
         nonlocal content_full
+
         content_full += f" {text}"
+
         await tts_callback(text, MessageStyleEnum.NONE)
 
     async def _content_callback(buffer: str) -> None:
@@ -563,6 +565,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     logger.debug(f'Built plugin: {plugins}')
 
     tools = []
+
     if not use_tools:
         logger.warning("Tools disabled for this chat")
 
@@ -732,10 +735,14 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
 
     # Recursive call if needed
     if tool_calls:
+        logger.debug(f'Tool calls, retrying chat!')
+
         return False, True, call  # no error, yes retry, call task
 
     # Retry if maximum tokens reached
     if maximum_tokens_reached:
+        logger.debug(f'Maximum tokens reached, retrying chat!')
+
         return False, True, call  # TODO: Should we notify an error?
 
     # No error, no retry
