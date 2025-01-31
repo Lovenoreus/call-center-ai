@@ -584,6 +584,7 @@ async def _communicationservices_validate_jwt(
         )
 
     service_jwt = str(service_jwt).replace("Bearer ", "")
+
     try:
         jwt.decode(
             algorithms=["RS256"],
@@ -597,6 +598,7 @@ async def _communicationservices_validate_jwt(
                 service_jwt
             ).key,
         )
+
     except jwt.PyJWTError as e:
         raise HTTPException(
             detail="Invalid JWT token",
@@ -612,6 +614,8 @@ async def _communicationservices_validate_call_id(
 
     # Enrich span
     SpanAttributeEnum.CALL_ID.attribute(str(call_id))
+
+    logger.debug(f'func call: _communicationservices_validate_call_id-call_get')
 
     # Validate call
     call = await _db.call_get(call_id)
@@ -811,6 +815,8 @@ async def communicationservices_callback_post(
 
     logger.debug('Communicationservices websocket start.')
 
+    logger.debug('func call: communicationservices_callback_post-_communicationservices_validate_jwt')
+
     # Validate connection
     await _communicationservices_validate_jwt(request.headers)
 
@@ -821,6 +827,8 @@ async def communicationservices_callback_post(
 
     if not events or not isinstance(events, list):
         raise RequestValidationError(["Events must be a list"])
+
+    logger.debug('func call: communicationservices_callback_post-_communicationservices_event_worker')
 
     # Process events in parallel
     await asyncio.gather(
@@ -860,6 +868,7 @@ async def _communicationservices_event_worker(
     logger.debug(f'Starting communication Event handling for: {event_dict} and Call ID: {call_id}')
 
 
+    logger.debug(f'func call: _communicationservices_event_worker-_communicationservices_validate_call_id')
     # Validate connection
     call = await _communicationservices_validate_call_id(call_id, secret)
 
@@ -872,6 +881,7 @@ async def _communicationservices_event_worker(
 
         # Store connection ID
         connection_id = event.data["callConnectionId"]
+
         async with _db.call_transac(
             call=call,
             scheduler=scheduler,
@@ -883,8 +893,12 @@ async def _communicationservices_event_worker(
 
         # Extract event context
         operation_context = event.data.get("operationContext", None)
+
+        logger.debug(f'func call: _communicationservices_event_worker-_str_to_contexts')
+
         operation_contexts = _str_to_contexts(operation_context)
 
+        logger.debug(f'func call: _communicationservices_event_worker-_use_automation_client')
         # Client SDK
         automation_client = await _use_automation_client()
 
@@ -899,6 +913,9 @@ async def _communicationservices_event_worker(
                 logger.debug(f'Running on_call_connected')
 
                 server_call_id = event.data["serverCallId"]
+
+                logger.debug(f'func call: _communicationservices_event_worker-on_call_connected')
+
                 await on_call_connected(
                     call=call,
                     client=automation_client,
@@ -909,6 +926,8 @@ async def _communicationservices_event_worker(
             # Call hung up
             case "Microsoft.Communication.CallDisconnected":
                 logger.debug(f'Running on_call_disconnected')
+
+                logger.debug(f'func call: _communicationservices_event_worker-on_call_disconnected')
 
                 await on_call_disconnected(
                     call=call,
@@ -926,6 +945,8 @@ async def _communicationservices_event_worker(
                 # Handle IVR
                 if recognition_result == "choices":
                     label_detected: str = event.data["choiceResult"]["label"]
+
+                    logger.debug(f'func call: _communicationservices_event_worker-on_ivr_recognized')
 
                     await on_ivr_recognized(
                         call=call,
@@ -948,6 +969,8 @@ async def _communicationservices_event_worker(
                     error_message,
                 )
 
+                logger.debug(f'func call: _communicationservices_event_worker-on_automation_recognize_error')
+
                 await on_automation_recognize_error(
                     call=call,
                     client=automation_client,
@@ -960,6 +983,8 @@ async def _communicationservices_event_worker(
             case "Microsoft.Communication.PlayStarted":
                 logger.debug(f'Running on_play_started')
 
+                logger.debug(f'func call: _communicationservices_event_worker-on_play_started')
+
                 await on_play_started(
                     call=call,
                     scheduler=scheduler,
@@ -968,6 +993,8 @@ async def _communicationservices_event_worker(
             # Media played
             case "Microsoft.Communication.PlayCompleted":
                 logger.debug(f'Running on_automation_play_completed')
+
+                logger.debug(f'func call: _communicationservices_event_worker-on_automation_play_completed')
 
                 await on_automation_play_completed(
                     call=call,
@@ -983,6 +1010,9 @@ async def _communicationservices_event_worker(
 
                 result_information = event.data["resultInformation"]
                 error_code: int = result_information["subCode"]
+
+                logger.debug(f'func call: _communicationservices_event_worker-on_play_error')
+
                 await on_play_error(error_code)
 
             # Call transfer failed
@@ -991,6 +1021,9 @@ async def _communicationservices_event_worker(
 
                 result_information = event.data["resultInformation"]
                 sub_code: int = result_information["subCode"]
+
+                logger.debug(f'func call: _communicationservices_event_worker-on_transfer_error')
+
                 await on_transfer_error(
                     call=call,
                     client=automation_client,

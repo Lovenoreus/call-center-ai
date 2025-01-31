@@ -454,7 +454,7 @@ class LlmModel(BaseModel):
             [line.strip() for line in formatted_prompt.splitlines()]
         )
 
-        self.logger.debug("Formatted prompt: %s", formatted_prompt)
+        # self.logger.debug("Formatted prompt: %s", formatted_prompt)
 
         return formatted_prompt
 
@@ -468,6 +468,7 @@ class LlmModel(BaseModel):
             ),
         ]
         self.logger.debug("Messages: %s", messages)
+
         return messages
 
     @cached_property
@@ -565,6 +566,8 @@ class TtsModel(BaseModel):
 
     async def ivr_language(self, call: CallStateModel) -> str:
         res = ""
+
+        # Loop through available languages.
         for i, lang in enumerate(call.initiate.lang.availables):
             res += (
                 self._return(
@@ -574,6 +577,7 @@ class TtsModel(BaseModel):
                 )
                 + " "
             )
+
         return await self._translate([res], call)
 
     def _return(self, prompt_tpls: list[str], **kwargs) -> str:
@@ -581,6 +585,7 @@ class TtsModel(BaseModel):
         Remove possible indentation in a string.
         """
         self.logger.debug(f'Selecting random prompt template')
+
         # Select a random prompt template
         prompt_tpl = random.choice(prompt_tpls)
 

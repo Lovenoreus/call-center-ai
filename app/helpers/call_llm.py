@@ -245,7 +245,7 @@ async def load_llm_chat(  # noqa: PLR0913
             # the first message, LLM hallucinates it and this is extremely
             # frustrating for the user, don't wait for the response to start
             # the VAD quickly
-            logger.debug(f'Returning User call')
+            logger.debug(f'A returning User calling')
             logger.debug(f'func call: load_llm_chat-_commit_answer')
 
             await _commit_answer(
@@ -550,7 +550,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
         trainings=trainings,
     )
 
-    logger.debug(f'Using the system: {system}')
+    # logger.debug(f'Using the system: {system}')
 
     # Build plugins
     plugins = DefaultPlugin(

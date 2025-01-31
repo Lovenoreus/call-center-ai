@@ -134,7 +134,6 @@ async def on_call_connected(
         ),  # Second, start recording the call
     )
 
-    logger.debug(f'Updating the call to in progress!')
 
     # Add define the call as in progress
     async with _db.call_transac(
@@ -152,6 +151,8 @@ async def on_call_connected(
                 persona=MessagePersonaEnum.HUMAN,
             )
         )
+
+        logger.debug(f'Updating the call to in progress!')
 
 
 @tracer.start_as_current_span("on_call_disconnected")
@@ -839,6 +840,8 @@ async def _handle_ivr_language(
                 tone=tones[i],
             )
         )
+
+    logger.debug(f'func call: _handle_ivr_language-handle_recognize_ivr')
 
     # Handle the choices.
     await handle_recognize_ivr(

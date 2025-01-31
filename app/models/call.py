@@ -129,7 +129,7 @@ class CallStateModel(CallGetModel, extra="ignore"):
 
     @property
     def lang(self) -> LanguageEntryModel:  # pyright: ignore
-        self.logger.debug(f'Setting the language. ShortCode: {self.lang_short_code}')
+        # self.logger.debug(f'Setting the language. ShortCode: {self.lang_short_code}')
 
         default = self.initiate.lang.default_lang
 
