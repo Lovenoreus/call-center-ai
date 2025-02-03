@@ -44,3 +44,5 @@ def load_config() -> RootModel:
 
 
 CONFIG = load_config()
+
+print(CONFIG)
