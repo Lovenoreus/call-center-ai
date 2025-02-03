@@ -467,7 +467,7 @@ class LlmModel(BaseModel):
                 content=system,
             ),
         ]
-        self.logger.debug("Messages: %s", messages)
+        # self.logger.debug("Messages: %s", messages)
 
         return messages
 

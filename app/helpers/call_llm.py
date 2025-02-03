@@ -197,7 +197,8 @@ async def load_llm_chat(  # noqa: PLR0913
                 if _retry:
                     return
 
-                # Retry recognition, maybe the user was too fast or the recognition is temporarly slow
+                # Retry recognition, maybe the user was too fast or the recognition is
+                # temporarly slow
                 await asyncio.sleep(0.2)
 
                 return await _response_callback(_retry=True)
@@ -414,7 +415,8 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
 
                     soft_timeout_triggered = True
 
-                    # Never store the error message in the call history, it has caused hallucinations in the LLM.
+                    # Never store the error message in the call history,
+                    # it has caused hallucinations in the LLM.
                     await handle_realtime_tts(
                         call=call,
                         scheduler=scheduler,
@@ -423,7 +425,8 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
                         tts_client=tts_client,
                     )
 
-                # Do not play timeout prompt plus loading, it can be frustrating for the user
+                # Do not play timeout prompt plus loading,
+                # it can be frustrating for the user
                 elif loading_task.done():
                     loading_task = _loading_task()
 
@@ -571,6 +574,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
 
     else:
         tools = await plugins.to_openai(frozenset(tool_blacklist))
+
         logger.debug("Tools: %s", tools)
 
     # Translate messages to avoid LLM hallucinations
@@ -599,7 +603,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
             system=system,
             tools=tools,
         ):
-            logger.debug(f'Completed stream delta: {delta}')
+            # logger.debug(f'Completed stream delta: {delta}')
 
             # Complete tools
             if delta.tool_calls:

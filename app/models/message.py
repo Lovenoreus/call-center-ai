@@ -148,6 +148,8 @@ class MessageModel(BaseModel):
         # Work on a copy to avoid modifying the original model in the database
         copy = self.model_copy()
 
+        self.logger.debug(f'Model copy is: {copy}')
+
         # Skip if no language is set
         if not self.lang_short_code:
             self.logger.debug(f'No language is set.')

@@ -101,7 +101,7 @@ async def completion_stream(
                     system=system,
                     tools=tools,
                 ):
-                    logger.debug(f'Using primary LLM for chunk: {chunck}')
+                    # logger.debug(f'Using primary LLM for chunk: {chunck}')
 
                     yield chunck
 
@@ -198,7 +198,7 @@ async def _completion_stream_worker(
             raise MaximumTokensReachedError(f"Maximum tokens reached {max_tokens}")
 
         if delta:
-            logger.debug(f'Yield delta: {delta}')
+            # logger.debug(f'Yield delta: {delta}')
 
             yield delta
 

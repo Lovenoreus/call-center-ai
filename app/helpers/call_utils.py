@@ -845,6 +845,7 @@ class SttClient:
         # Wait the complete recognition for 50ms maximum
         try:
             logger.debug(f'Waiting for complete recognition done')
+
             await asyncio.wait_for(
                 self._stt_complete_gate.wait(),
                 timeout=await recognition_stt_complete_timeout_ms() / 1000,
