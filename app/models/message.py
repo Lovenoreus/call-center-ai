@@ -154,7 +154,7 @@ class MessageModel(BaseModel):
         if not self.lang_short_code:
             self.logger.debug(f'No language is set.')
 
-            self.logger.debug(f'Returning copy: {copy}')
+            self.logger.debug(f'Returning not translated copy: {copy}')
 
             return copy
 
@@ -175,7 +175,7 @@ class MessageModel(BaseModel):
 
             self.logger.debug(f'Modifying translation. New is: {copy}')
 
-        self.logger.debug(f'Returning copy: {copy}')
+        self.logger.debug(f'Returning translated copy: {copy}')
 
         return copy
 

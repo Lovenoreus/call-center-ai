@@ -339,8 +339,8 @@ def _limit_messages(  # noqa: PLR0913
     Returns a list of messages limited by the context size.
 
     The context size is the maximum number of tokens allowed by the model.
-    The messages are selected from the newest to the oldest, until the context or the maximum number
-    of messages is reached.
+    The messages are selected from the newest to the oldest, until the context or
+    the maximum number of messages is reached.
     """
 
     max_tokens = max_tokens or 0  # Default
@@ -360,17 +360,22 @@ def _limit_messages(  # noqa: PLR0913
     for tool in tools or []:
         tokens += _count_tokens(_dump_sdk_model(tool), model)
 
-    # Add user messages until the available context is reached, from the newest to the oldest
+    # Add user messages until the available context is reached,
+    # from the newest to the oldest
     for message in messages[::-1]:
         openai_message = message.to_openai()
+
         new_tokens = _count_tokens(
             "".join([_dump_sdk_model(x) for x in openai_message]),
             model,
         )
+
         if tokens + new_tokens >= max_context:
             break
+
         if counter >= max_messages:
             break
+
         counter += 1
         selected_messages += openai_message[::-1]
         tokens += new_tokens

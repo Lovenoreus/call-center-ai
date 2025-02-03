@@ -372,6 +372,8 @@ async def _continue_chat(  # noqa: PLR0915, PLR0913
     is_error = True
     continue_chat = True
 
+    # Using the soft and hard timeouts to wait for the chat with the LLM
+    # to be done.
     try:
         while True:
             # logger.debug("Chat task status: %s", chat_task.done())
@@ -596,9 +598,11 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
 
         logger.debug(f'func call: _generate_chat_completion-completion_stream')
 
+        # Generate the LLM's response from chunks.
         # Consume the completion stream
         async for delta in completion_stream(
-            max_tokens=160,  # Lowest possible value for 90% of the cases, if not sufficient, retry will be triggered, 100 tokens ~= 75 words, 20 words ~= 1 sentence, 6 sentences ~= 160 tokens
+            max_tokens=160,  # Lowest possible value for 90% of the cases, if not sufficient,
+            # retry will be triggered, 100 tokens ~= 75 words, 20 words ~= 1 sentence, 6 sentences ~= 160 tokens
             messages=translated_messages,
             system=system,
             tools=tools,
@@ -679,9 +683,12 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
     # Convert tool calls buffer
     tool_calls = [tool_call for _, tool_call in tool_calls_buffer.items()]
 
+    logger.debug(f"Final Content Full: {content_full}")
+
     # Delete action and style from the message as they are in the history and LLM hallucinates them
     last_style, content_full = extract_message_style(content_full)
 
+    # The Complete LLM's response.
     logger.debug("Completion response: %s", content_full)
     logger.debug("Completion tools: %s", tool_calls)
 
@@ -735,7 +742,7 @@ async def _generate_chat_completion(  # noqa: PLR0913, PLR0912, PLR0915
             )
         )
 
-        logger.debug(f'Message stored')
+        logger.debug(f'Message already stored in the tts_callback executed above')
 
     # Recursive call if needed
     if tool_calls:
